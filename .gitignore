@@ -1,0 +1,51 @@
+# Go
+build/bin
+*.exe
+*.exe~
+*.dll
+*.dylib
+*.so
+*.test
+*.out
+vendor/
+go.work
+
+# Wails build output
+build/bin
+build/darwin/HRPMLW.app
+build/windows/HRPMLW.exe
+build/linux/
+build/appicon.png
+
+# Node / Frontend
+node_modules/
+frontend/dist/
+frontend/node_modules/
+frontend/wailsjs/
+frontend/package-lock.json.md5
+
+# Vite
+.vite/
+
+# IDE / Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Env / Local config
+.env
+.env.local
+.env.*.local
+
+# OS
+.DS_Store
+
