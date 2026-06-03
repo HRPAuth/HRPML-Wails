@@ -11,7 +11,7 @@ export interface LauncherConfig {
 
 export const CMCL_CONFIG: CMCLConfig = {
   cmclPath: process.env.CMCL_PATH || 'java -jar ./cmcl.jar',
-  shellApiUrl: process.env.SHELL_API_URL || 'http://localhost:34501/'
+  shellApiUrl: process.env.SHELL_API_URL || 'http://localhost:34501'
 };
 
 export const LAUNCHER_CONFIG: LauncherConfig = {
