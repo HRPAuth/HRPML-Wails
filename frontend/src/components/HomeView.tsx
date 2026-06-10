@@ -20,6 +20,7 @@ import {
   Settings,
   ExpandMore,
   ExpandLess,
+  Refresh,
 } from '@mui/icons-material';
 import { StoredAccount } from './AccountManager';
 
@@ -34,6 +35,14 @@ interface InstalledVersion {
 interface ModLoader {
   name: string;
   version: string;
+}
+
+interface LogEntry {
+  id: number;
+  level: string;
+  message: string;
+  source?: string;
+  created_at: string;
 }
 
 interface HomeViewProps {
@@ -78,6 +87,9 @@ export default function HomeView({
   const [showSettings, setShowSettings] = useState(false);
   const [launching, setLaunching] = useState(false);
   const [error, setError] = useState('');
+  const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [showLogs, setShowLogs] = useState(false);
+  const [logsLoading, setLogsLoading] = useState(false);
 
   useEffect(() => {
     loadVersions();
@@ -124,8 +136,8 @@ export default function HomeView({
   const fetchLoaders = async (mcVersion: string) => {
     try {
       const [fabricRes, forgeRes] = await Promise.all([
-        fetch(`/api/v1/fabric/versions?mc=${mcVersion}`),
-        fetch(`/api/v1/forge/versions?mc=${mcVersion}`),
+        fetch(`http://localhost:34501/api/v1/fabric/versions?mc=${mcVersion}`),
+        fetch(`http://localhost:34501/api/v1/forge/versions?mc=${mcVersion}`),
       ]);
 
       const fabricData = await fabricRes.json();
@@ -154,6 +166,21 @@ export default function HomeView({
       setLoaders(loaderList);
     } catch (err) {
       console.error('Failed to fetch loaders:', err);
+    }
+  };
+
+  const fetchLogs = async () => {
+    setLogsLoading(true);
+    try {
+      const response = await fetch('http://localhost:34501/api/v1/db/logs?limit=100');
+      const data = await response.json();
+      if (Array.isArray(data)) {
+        setLogs(data);
+      }
+    } catch (err) {
+      console.error('Failed to fetch logs:', err);
+    } finally {
+      setLogsLoading(false);
     }
   };
 
@@ -189,6 +216,7 @@ export default function HomeView({
 
     setLaunching(true);
     setError('');
+    setShowLogs(true);
 
     try {
       const response = await fetch('http://localhost:34501/api/v1/launcher/launch', {
@@ -220,6 +248,7 @@ export default function HomeView({
       setError('Failed to launch game. Please try again.');
     } finally {
       setLaunching(false);
+      fetchLogs();
     }
   };
 
@@ -230,6 +259,21 @@ export default function HomeView({
     { value: 4096, label: '4GB' },
     { value: 8192, label: '8GB' },
   ];
+
+  const getLogLevelColor = (level: string) => {
+    switch (level.toLowerCase()) {
+      case 'error':
+        return '#ef4444';
+      case 'warn':
+        return '#f59e0b';
+      case 'info':
+        return '#3b82f6';
+      case 'debug':
+        return '#8b5cf6';
+      default:
+        return '#9ca3af';
+    }
+  };
 
   return (
     <Box>
@@ -404,6 +448,54 @@ export default function HomeView({
           </Collapse>
         </Paper>
       </Box>
+
+      {/* Logs Panel */}
+      <Collapse in={showLogs}>
+        <Paper sx={{ p: 3, backgroundColor: '#282c34', mt: 3 }}>
+          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+            <Typography variant="h6" sx={{ color: 'white' }}>
+              Logs
+            </Typography>
+            <Button
+              startIcon={<Refresh />}
+              onClick={fetchLogs}
+              disabled={logsLoading}
+              sx={{ color: '#9ca3af', textTransform: 'none' }}
+            >
+              Refresh
+            </Button>
+          </Box>
+
+          <Box sx={{ height: 200, backgroundColor: '#1f2937', borderRadius: 1, overflowY: 'auto', p: 2 }}>
+              {logsLoading ? (
+                <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
+                  <CircularProgress size={24} />
+                </Box>
+              ) : logs.length === 0 ? (
+                <Typography sx={{ color: '#6b7280', textAlign: 'center', py: 4 }}>
+                  No logs available
+                </Typography>
+              ) : (
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                  {logs.map((log) => (
+                    <Box key={log.id} sx={{ display: 'flex', gap: 2, fontSize: '0.875rem' }}>
+                      <span style={{ color: '#6b7280', fontSize: '0.75rem' }}>
+                        {new Date(log.created_at).toLocaleTimeString()}
+                      </span>
+                      <span style={{ color: getLogLevelColor(log.level), fontWeight: 'bold' }}>
+                        [{log.level.toUpperCase()}]
+                      </span>
+                      <span style={{ color: '#e5e7eb' }}>
+                        {log.source && <span style={{ color: '#9ca3af' }}>[{log.source}]</span>}
+                        {log.message}
+                      </span>
+                    </Box>
+                  ))}
+                </Box>
+              )}
+          </Box>
+        </Paper>
+      </Collapse>
 
       {/* Launch Button */}
       <Box sx={{ mt: 3, display: 'flex', justifyContent: 'center', gap: 2 }}>
