@@ -119,7 +119,7 @@ export default function App() {
       case 'mods':
         return <ModManager onOpenModsFolder={handleOpenModsFolder} />;
       case 'settings':
-        return <SettingsView onSettingsChange={(settings) => console.log('Settings changed:', settings)} />;
+        return <SettingsView />;
       case 'debug':
         return <DebugView />;
       default:
