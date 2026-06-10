@@ -1,20 +1,437 @@
+import { useState, useEffect } from 'react';
+import {
+  Box,
+  Typography,
+  Button,
+  Paper,
+  Select,
+  MenuItem,
+  FormControl,
+  InputLabel,
+  Slider,
+  TextField,
+  CircularProgress,
+  Alert,
+  Collapse,
+  Divider,
+} from '@mui/material';
+import {
+  PlayArrow,
+  Settings,
+  ExpandMore,
+  ExpandLess,
+} from '@mui/icons-material';
+import { StoredAccount } from './AccountManager';
 
-import { Box, Typography } from '@mui/material';
-
-interface HomeViewProps {
-  selectedVersion: string | null;
-  onVersionSelect: (version: string) => void;
+interface InstalledVersion {
+  id: string;
+  type: string;
+  installed: boolean;
+  loaderType?: string;
+  loaderVersion?: string;
 }
 
-export default function HomeView(_props: HomeViewProps) {
+interface ModLoader {
+  name: string;
+  version: string;
+}
+
+interface HomeViewProps {
+  selectedVersion: InstalledVersion | null;
+  onVersionSelect: (version: InstalledVersion | null) => void;
+  currentAccount: StoredAccount | null;
+  onOpenSettings: () => void;
+}
+
+const STORAGE_KEY = 'launcher_settings';
+
+interface LauncherSettings {
+  maxMemory: number;
+  minMemory: number;
+  javaArgs: string;
+  gameWidth: number;
+  gameHeight: number;
+  selectedLoader: string;
+  loaderVersion: string;
+}
+
+const DEFAULT_SETTINGS: LauncherSettings = {
+  maxMemory: 4096,
+  minMemory: 1024,
+  javaArgs: '',
+  gameWidth: 854,
+  gameHeight: 480,
+  selectedLoader: 'none',
+  loaderVersion: '',
+};
+
+export default function HomeView({
+  selectedVersion,
+  onVersionSelect,
+  currentAccount,
+  onOpenSettings,
+}: HomeViewProps) {
+  const [versions, setVersions] = useState<InstalledVersion[]>([]);
+  const [currentVersion, setCurrentVersion] = useState<InstalledVersion | null>(selectedVersion);
+  const [loaders, setLoaders] = useState<ModLoader[]>([]);
+  const [settings, setSettings] = useState<LauncherSettings>(DEFAULT_SETTINGS);
+  const [showSettings, setShowSettings] = useState(false);
+  const [launching, setLaunching] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    loadVersions();
+    loadSettings();
+  }, []);
+
+  useEffect(() => {
+    if (currentVersion) {
+      onVersionSelect(currentVersion);
+    }
+  }, [currentVersion]);
+
+  const loadVersions = () => {
+    try {
+      const stored = localStorage.getItem('installed_versions');
+      if (stored) {
+        setVersions(JSON.parse(stored));
+      }
+    } catch (err) {
+      console.error('Failed to load versions:', err);
+    }
+  };
+
+  const loadSettings = () => {
+    try {
+      const stored = localStorage.getItem(STORAGE_KEY);
+      if (stored) {
+        setSettings({ ...DEFAULT_SETTINGS, ...JSON.parse(stored) });
+      }
+    } catch (err) {
+      console.error('Failed to load settings:', err);
+    }
+  };
+
+  const saveSettings = (newSettings: LauncherSettings) => {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(newSettings));
+      setSettings(newSettings);
+    } catch (err) {
+      console.error('Failed to save settings:', err);
+    }
+  };
+
+  const fetchLoaders = async (mcVersion: string) => {
+    try {
+      const [fabricRes, forgeRes] = await Promise.all([
+        fetch(`/api/v1/fabric/versions?mc=${mcVersion}`),
+        fetch(`/api/v1/forge/versions?mc=${mcVersion}`),
+      ]);
+
+      const fabricData = await fabricRes.json();
+      const forgeData = await forgeRes.json();
+
+      const loaderList: ModLoader[] = [{ name: 'none', version: '' }];
+
+      if (fabricData.success && Array.isArray(fabricData.data)) {
+        fabricData.data.slice(0, 5).forEach((f: any) => {
+          loaderList.push({
+            name: `fabric-${f.loader.version}`,
+            version: f.loader.version,
+          });
+        });
+      }
+
+      if (forgeData.success && Array.isArray(forgeData.data)) {
+        forgeData.data.slice(0, 5).forEach((f: any) => {
+          loaderList.push({
+            name: `forge-${f.version}`,
+            version: f.version,
+          });
+        });
+      }
+
+      setLoaders(loaderList);
+    } catch (err) {
+      console.error('Failed to fetch loaders:', err);
+    }
+  };
+
+  const handleVersionChange = (versionId: string) => {
+    const version = versions.find(v => v.id === versionId);
+    setCurrentVersion(version || null);
+    if (version) {
+      fetchLoaders(version.id);
+    }
+  };
+
+  const handleLoaderChange = (loaderName: string) => {
+    const loader = loaders.find(l => l.name === loaderName);
+    saveSettings({
+      ...settings,
+      selectedLoader: loaderName,
+      loaderVersion: loader?.version || '',
+    });
+  };
+
+  const handleSettingChange = (key: keyof LauncherSettings, value: number | string) => {
+    saveSettings({
+      ...settings,
+      [key]: value,
+    });
+  };
+
+  const handleLaunch = async () => {
+    if (!currentVersion || !currentAccount) {
+      setError('Please select a version and account');
+      return;
+    }
+
+    setLaunching(true);
+    setError('');
+
+    try {
+      const response = await fetch('http://localhost:34501/api/v1/launcher/launch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          version_id: currentVersion.id,
+          username: currentAccount.username,
+          uuid: currentAccount.uuid,
+          access_token: currentAccount.accessToken,
+          client_token: currentAccount.clientToken,
+          loader_type: settings.selectedLoader === 'none' ? '' : settings.selectedLoader.split('-')[0],
+          loader_version: settings.loaderVersion,
+          max_memory: settings.maxMemory,
+          min_memory: settings.minMemory,
+          java_args: settings.javaArgs,
+          game_width: settings.gameWidth,
+          game_height: settings.gameHeight,
+        }),
+      });
+
+      const data = await response.json();
+      if (data.success) {
+        console.log('Game launched with PID:', data.data?.pid);
+      } else {
+        setError(data.error || 'Failed to launch game');
+      }
+    } catch (err) {
+      setError('Failed to launch game. Please try again.');
+    } finally {
+      setLaunching(false);
+    }
+  };
+
+  const memoryMarks = [
+    { value: 512, label: '512MB' },
+    { value: 1024, label: '1GB' },
+    { value: 2048, label: '2GB' },
+    { value: 4096, label: '4GB' },
+    { value: 8192, label: '8GB' },
+  ];
+
   return (
     <Box>
       <Typography variant="h4" component="h1" gutterBottom sx={{ color: 'white' }}>
         Play
       </Typography>
-      <Typography sx={{ color: '#9ca3af' }}>
-        Welcome to Samuel Client! Select a version to get started.
-      </Typography>
+
+      <Collapse in={!!error}>
+        <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError('')}>
+          {error}
+        </Alert>
+      </Collapse>
+
+      <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' }, gap: 3 }}>
+        {/* Left Panel - Version Selection */}
+        <Paper sx={{ p: 3, backgroundColor: '#282c34' }}>
+          <Typography variant="h6" sx={{ color: 'white', mb: 2 }}>
+            Select Version
+          </Typography>
+
+          <FormControl fullWidth sx={{ mb: 3 }}>
+            <InputLabel sx={{ color: '#9ca3af' }}>Minecraft Version</InputLabel>
+            <Select
+              value={currentVersion?.id || ''}
+              onChange={(e) => handleVersionChange(e.target.value)}
+              label="Minecraft Version"
+              sx={{
+                color: 'white',
+                '.MuiOutlinedInput-notchedOutline': { borderColor: '#4a5568' },
+                '&:hover .MuiOutlinedInput-notchedOutline': { borderColor: '#4CAF50' },
+                '.MuiSvgIcon-root': { color: '#9ca3af' },
+              }}
+            >
+              {versions.length === 0 ? (
+                <MenuItem disabled value="">
+                  No versions installed
+                </MenuItem>
+              ) : (
+                versions.map((v) => (
+                  <MenuItem key={v.id} value={v.id}>
+                    {v.id}
+                  </MenuItem>
+                ))
+              )}
+            </Select>
+          </FormControl>
+
+          <FormControl fullWidth sx={{ mb: 3 }}>
+            <InputLabel sx={{ color: '#9ca3af' }}>Mod Loader</InputLabel>
+            <Select
+              value={settings.selectedLoader}
+              onChange={(e) => handleLoaderChange(e.target.value)}
+              label="Mod Loader"
+              sx={{
+                color: 'white',
+                '.MuiOutlinedInput-notchedOutline': { borderColor: '#4a5568' },
+                '&:hover .MuiOutlinedInput-notchedOutline': { borderColor: '#4CAF50' },
+                '.MuiSvgIcon-root': { color: '#9ca3af' },
+              }}
+            >
+              {loaders.map((l) => (
+                <MenuItem key={l.name} value={l.name}>
+                  {l.name === 'none' ? 'None' : l.name.replace('-', ' ')}
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+
+          <Divider sx={{ borderColor: '#374151', my: 2 }} />
+
+          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+            <Typography variant="subtitle2" sx={{ color: '#9ca3af' }}>
+              Account
+            </Typography>
+          </Box>
+
+          {currentAccount ? (
+            <Box sx={{ backgroundColor: '#2d3339', p: 2, borderRadius: 1 }}>
+              <Typography sx={{ color: 'white' }}>{currentAccount.username}</Typography>
+              <Typography variant="caption" sx={{ color: '#6b7280' }}>
+                {currentAccount.authType === 'authlib-injector' ? 'Online' : 'Offline'}
+              </Typography>
+            </Box>
+          ) : (
+            <Typography sx={{ color: '#ef4444' }}>No account selected</Typography>
+          )}
+        </Paper>
+
+        {/* Right Panel - Settings */}
+        <Paper sx={{ p: 3, backgroundColor: '#282c34' }}>
+          <Box
+            sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2, cursor: 'pointer' }}
+            onClick={() => setShowSettings(!showSettings)}
+          >
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <Settings sx={{ color: '#9ca3af' }} />
+              <Typography variant="h6" sx={{ color: 'white' }}>
+                Launch Settings
+              </Typography>
+            </Box>
+            {showSettings ? <ExpandLess sx={{ color: '#9ca3af' }} /> : <ExpandMore sx={{ color: '#9ca3af' }} />}
+          </Box>
+
+          <Collapse in={!showSettings}>
+            <Typography variant="body2" sx={{ color: '#6b7280', mb: 2 }}>
+              Memory: {settings.maxMemory}MB | Resolution: {settings.gameWidth}x{settings.gameHeight}
+            </Typography>
+          </Collapse>
+
+          <Collapse in={showSettings}>
+            <Box sx={{ pt: 1 }}>
+              <Typography gutterBottom sx={{ color: '#9ca3af', fontSize: '0.875rem' }}>
+                Maximum Memory: {settings.maxMemory}MB
+              </Typography>
+              <Slider
+                value={settings.maxMemory}
+                onChange={(_, value) => handleSettingChange('maxMemory', value as number)}
+                min={512}
+                max={16384}
+                step={256}
+                marks={memoryMarks}
+                sx={{
+                  color: '#4CAF50',
+                  '& .MuiSlider-markLabel': { color: '#6b7280', fontSize: '0.7rem' },
+                }}
+              />
+
+              <TextField
+                fullWidth
+                label="JVM Arguments"
+                value={settings.javaArgs}
+                onChange={(e) => handleSettingChange('javaArgs', e.target.value)}
+                placeholder="-XX:+UseG1GC"
+                size="small"
+                sx={{
+                  mt: 2,
+                  '& .MuiInputBase-input': { color: 'white' },
+                  '& .MuiInputLabel-root': { color: '#9ca3af' },
+                  '& .MuiOutlinedInput-notchedOutline': { borderColor: '#4a5568' },
+                }}
+              />
+
+              <Box sx={{ display: 'flex', gap: 2, mt: 2 }}>
+                <TextField
+                  label="Width"
+                  type="number"
+                  value={settings.gameWidth}
+                  onChange={(e) => handleSettingChange('gameWidth', parseInt(e.target.value) || 854)}
+                  size="small"
+                  sx={{
+                    flex: 1,
+                    '& .MuiInputBase-input': { color: 'white' },
+                    '& .MuiInputLabel-root': { color: '#9ca3af' },
+                    '& .MuiOutlinedInput-notchedOutline': { borderColor: '#4a5568' },
+                  }}
+                />
+                <TextField
+                  label="Height"
+                  type="number"
+                  value={settings.gameHeight}
+                  onChange={(e) => handleSettingChange('gameHeight', parseInt(e.target.value) || 480)}
+                  size="small"
+                  sx={{
+                    flex: 1,
+                    '& .MuiInputBase-input': { color: 'white' },
+                    '& .MuiInputLabel-root': { color: '#9ca3af' },
+                    '& .MuiOutlinedInput-notchedOutline': { borderColor: '#4a5568' },
+                  }}
+                />
+              </Box>
+            </Box>
+          </Collapse>
+        </Paper>
+      </Box>
+
+      {/* Launch Button */}
+      <Box sx={{ mt: 3, display: 'flex', justifyContent: 'center', gap: 2 }}>
+        <Button
+          variant="outlined"
+          startIcon={<Settings />}
+          onClick={onOpenSettings}
+          sx={{ borderColor: '#4a5568', color: '#9ca3af' }}
+        >
+          Settings
+        </Button>
+        <Button
+          variant="contained"
+          startIcon={launching ? <CircularProgress size={20} color="inherit" /> : <PlayArrow />}
+          onClick={handleLaunch}
+          disabled={launching || !currentVersion || !currentAccount}
+          sx={{
+            px: 4,
+            py: 1.5,
+            backgroundColor: '#4CAF50',
+            fontSize: '1.1rem',
+            '&:hover': { backgroundColor: '#45a049' },
+            '&:disabled': { backgroundColor: '#374151', color: '#6b7280' },
+          }}
+        >
+          {launching ? 'Launching...' : 'Play'}
+        </Button>
+      </Box>
     </Box>
   );
 }

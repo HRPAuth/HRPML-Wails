@@ -1,12 +1,13 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Box, Drawer, List, ListItem, ListItemButton, ListItemIcon, ListItemText, AppBar, Toolbar, Typography, IconButton } from '@mui/material';
-import { Gamepad, Home, Settings, Group, Layers, Menu, BugReport } from '@mui/icons-material';
+import { Gamepad, Home, Settings, Group, Layers, Menu, BugReport, ArrowBack } from '@mui/icons-material';
 import HomeView from './components/HomeView';
 import VersionManager from './components/VersionManager';
-import AccountManager from './components/AccountManager';
+import AccountManager, { StoredAccount, saveAccount } from './components/AccountManager';
 import ModManager from './components/ModManager';
 import SettingsView from './components/SettingsView';
 import DebugView from './components/DebugView';
+import LoginView, { LoggedInAccount } from './components/LoginView';
 
 const drawerWidth = 240;
 
@@ -27,30 +28,120 @@ const navItems: NavItem[] = [
 
 export default function App() {
   const [selectedView, setSelectedView] = useState<string>('home');
-  const [selectedVersion, setSelectedVersion] = useState<string | null>(null);
+  const [selectedVersion, setSelectedVersion] = useState<any>(null);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [currentAccount, setCurrentAccount] = useState<StoredAccount | null>(null);
+  const [showLogin, setShowLogin] = useState(false);
+
+  useEffect(() => {
+    // Load last used account
+    loadLastUsedAccount();
+  }, []);
+
+  const loadLastUsedAccount = () => {
+    try {
+      const stored = localStorage.getItem('minecraft_accounts');
+      if (stored) {
+        const accounts: StoredAccount[] = JSON.parse(stored);
+        const lastUsed = accounts.find(acc => acc.lastUsed);
+        if (lastUsed) {
+          setCurrentAccount(lastUsed);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to load last used account:', err);
+    }
+  };
+
+  const handleLoginSuccess = (account: LoggedInAccount) => {
+    const savedAccount = saveAccount(account);
+    setCurrentAccount(savedAccount);
+    setShowLogin(false);
+    setSelectedView('home');
+  };
+
+  const handleSelectAccount = (account: StoredAccount) => {
+    setCurrentAccount(account);
+    setSelectedView('home');
+  };
+
+  const handleAddAccount = () => {
+    setShowLogin(true);
+  };
+
+  const handleOpenSettings = () => {
+    setSelectedView('settings');
+  };
+
+  const handleOpenModsFolder = () => {
+    // Open mods folder in file explorer
+    const modsPath = getModsFolderPath();
+    window.open(`file://${modsPath}`, '_blank');
+  };
+
+  const getModsFolderPath = () => {
+    const home = '/home/lnb/.minecraft';
+    return `${home}/mods`;
+  };
+
+  const renderView = () => {
+    if (showLogin) {
+      return (
+        <LoginView
+          onLoginSuccess={handleLoginSuccess}
+          onSwitchToAccounts={() => {
+            setShowLogin(false);
+            setSelectedView('accounts');
+          }}
+        />
+      );
+    }
+
+    switch (selectedView) {
+      case 'home':
+        return (
+          <HomeView
+            selectedVersion={selectedVersion}
+            onVersionSelect={setSelectedVersion}
+            currentAccount={currentAccount}
+            onOpenSettings={handleOpenSettings}
+          />
+        );
+      case 'versions':
+        return <VersionManager onSelectVersion={setSelectedVersion} />;
+      case 'accounts':
+        return (
+          <AccountManager
+            onSelectAccount={handleSelectAccount}
+            onAddAccount={handleAddAccount}
+          />
+        );
+      case 'mods':
+        return <ModManager onOpenModsFolder={handleOpenModsFolder} />;
+      case 'settings':
+        return <SettingsView onSettingsChange={(settings) => console.log('Settings changed:', settings)} />;
+      case 'debug':
+        return <DebugView />;
+      default:
+        return (
+          <HomeView
+            selectedVersion={selectedVersion}
+            onVersionSelect={setSelectedVersion}
+            currentAccount={currentAccount}
+            onOpenSettings={handleOpenSettings}
+          />
+        );
+    }
+  };
 
   const handleDrawerToggle = () => {
     setMobileOpen(!mobileOpen);
   };
 
-  const renderView = () => {
-    switch (selectedView) {
-      case 'home':
-        return <HomeView selectedVersion={selectedVersion} onVersionSelect={setSelectedVersion} />;
-      case 'versions':
-        return <VersionManager />;
-      case 'accounts':
-        return <AccountManager />;
-      case 'mods':
-        return <ModManager />;
-      case 'settings':
-        return <SettingsView />;
-      case 'debug':
-        return <DebugView />;
-      default:
-        return <HomeView selectedVersion={selectedVersion} onVersionSelect={setSelectedVersion} />;
-    }
+  const getCurrentTitle = () => {
+    if (showLogin) return 'Login';
+    const item = navItems.find(n => n.id === selectedView);
+    return item?.label || 'Play';
   };
 
   return (
@@ -73,9 +164,14 @@ export default function App() {
           >
             <Menu />
           </IconButton>
-          <Typography variant="h6" noWrap component="div">
-            Samuel Client
+          <Typography variant="h6" noWrap component="div" sx={{ flexGrow: 1 }}>
+            {getCurrentTitle()}
           </Typography>
+          {!showLogin && !currentAccount && (
+            <IconButton color="inherit" onClick={() => setShowLogin(true)}>
+              <ArrowBack />
+            </IconButton>
+          )}
         </Toolbar>
       </AppBar>
 
@@ -97,15 +193,21 @@ export default function App() {
           }}
         >
           <Box onClick={handleDrawerToggle} sx={{ textAlign: 'center' }}>
-            <Typography variant="h6" sx={{ my: 2 }}>Samuel Client</Typography>
+            <Typography variant="h6" sx={{ my: 2, color: 'white' }}>Minecraft</Typography>
             <List>
               {navItems.map((item) => (
                 <ListItem key={item.id}>
-                  <ListItemButton selected={selectedView === item.id}>
-                    <ListItemIcon>
+                  <ListItemButton
+                    selected={selectedView === item.id && !showLogin}
+                    onClick={() => {
+                      setSelectedView(item.id);
+                      setShowLogin(false);
+                    }}
+                  >
+                    <ListItemIcon sx={{ color: selectedView === item.id && !showLogin ? 'white' : '#9ca3af' }}>
                       <item.icon />
                     </ListItemIcon>
-                    <ListItemText primary={item.label} />
+                    <ListItemText primary={item.label} sx={{ color: selectedView === item.id && !showLogin ? 'white' : '#d1d5db' }} />
                   </ListItemButton>
                 </ListItem>
               ))}
@@ -122,20 +224,23 @@ export default function App() {
           open
         >
           <Box sx={{ textAlign: 'center', py: 4 }}>
-            <Typography variant="h6" sx={{ color: 'white' }}>Samuel Client</Typography>
+            <Typography variant="h6" sx={{ color: 'white' }}>Minecraft Launcher</Typography>
           </Box>
           <List>
             {navItems.map((item) => (
               <ListItem key={item.id}>
                 <ListItemButton
-                  selected={selectedView === item.id}
-                  onClick={() => setSelectedView(item.id)}
+                  selected={selectedView === item.id && !showLogin}
+                  onClick={() => {
+                    setSelectedView(item.id);
+                    setShowLogin(false);
+                  }}
                   sx={{ '&.Mui-selected': { backgroundColor: '#4CAF50' } }}
                 >
-                  <ListItemIcon sx={{ color: selectedView === item.id ? 'white' : '#9ca3af' }}>
+                  <ListItemIcon sx={{ color: selectedView === item.id && !showLogin ? 'white' : '#9ca3af' }}>
                     <item.icon />
                   </ListItemIcon>
-                  <ListItemText primary={item.label} sx={{ color: selectedView === item.id ? 'white' : '#d1d5db' }} />
+                  <ListItemText primary={item.label} sx={{ color: selectedView === item.id && !showLogin ? 'white' : '#d1d5db' }} />
                 </ListItemButton>
               </ListItem>
             ))}

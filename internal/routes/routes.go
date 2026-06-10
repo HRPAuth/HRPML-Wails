@@ -12,6 +12,7 @@ type Router struct {
 	Engine  *gin.Engine
 	Handler *handlers.Handler
 	DB      *handlers.DBHandler
+	MC      *handlers.MCHandler
 }
 
 // NewRouter creates a new Router
@@ -28,6 +29,7 @@ func NewRouter() *Router {
 		Engine:  engine,
 		Handler: handlers.NewHandler(),
 		DB:      handlers.NewDBHandler(),
+		MC:      handlers.NewMCHandler(),
 	}
 }
 
@@ -59,6 +61,9 @@ func (r *Router) Setup() {
 
 		// Database routes
 		r.setupDatabaseRoutes(v1)
+
+		// Minecraft launcher routes
+		r.setupMCRoutes(v1)
 	}
 
 	// Legacy routes (for backward compatibility)
@@ -124,6 +129,51 @@ func (r *Router) setupDatabaseRoutes(rg *gin.RouterGroup) {
 			files.PUT("/:id", r.DB.UpdateFileRecord)
 			files.DELETE("/:id", r.DB.DeleteFileRecord)
 		}
+	}
+}
+
+// setupMCRoutes sets up Minecraft launcher routes
+func (r *Router) setupMCRoutes(rg *gin.RouterGroup) {
+	// Auth routes
+	auth := rg.Group("/auth")
+	{
+		auth.GET("/meta", r.MC.GetAuthlibMeta)
+		auth.POST("/login", r.MC.AuthlibLogin)
+		auth.POST("/refresh", r.MC.AuthlibRefresh)
+		auth.POST("/offline", r.MC.OfflineLogin)
+	}
+
+	// Version routes
+	versions := rg.Group("/versions")
+	{
+		versions.GET("", r.MC.GetVersions)
+		versions.GET("/:id", r.MC.GetVersionManifest)
+	}
+
+	// Fabric routes
+	fabric := rg.Group("/fabric")
+	{
+		fabric.GET("/versions", r.MC.GetFabricVersions)
+	}
+
+	// Forge routes
+	forge := rg.Group("/forge")
+	{
+		forge.GET("/versions", r.MC.GetForgeVersions)
+	}
+
+	// Download routes
+	download := rg.Group("/download")
+	{
+		download.POST("/version", r.MC.DownloadVersion)
+	}
+
+	// Launcher routes
+	launcher := rg.Group("/launcher")
+	{
+		launcher.GET("/config", r.MC.GetLauncherConfig)
+		launcher.POST("/launch", r.MC.LaunchGame)
+		launcher.GET("/minecraft-dir", r.MC.GetMinecraftDir)
 	}
 }
 
