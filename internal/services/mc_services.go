@@ -804,8 +804,91 @@ func (l *LauncherService) GetJavaPath() string {
 	return "java" // Fallback to PATH
 }
 
-// BuildLaunchCommand builds the Minecraft launch command
+// loadVersionJSON reads the version JSON file from <gameDir>/versions/<id>/<id>.json
+func (l *LauncherService) loadVersionJSON(versionID, gameDir string) (*BMCLVersionJSON, error) {
+	versionJSONPath := filepath.Join(gameDir, "versions", versionID, versionID+".json")
+	data, err := os.ReadFile(versionJSONPath)
+	if err != nil {
+		return nil, fmt.Errorf("read version json %q: %w", versionJSONPath, err)
+	}
+	var versionJSON BMCLVersionJSON
+	if err := json.Unmarshal(data, &versionJSON); err != nil {
+		return nil, fmt.Errorf("parse version json: %w", err)
+	}
+	return &versionJSON, nil
+}
+
+// buildLibraryClasspath assembles the classpath from the version's libraries,
+// honouring OS rules and skipping natives (which are loaded via -Djava.library.path).
+func buildLibraryClasspath(versionJSON *BMCLVersionJSON, librariesDir string) string {
+	sep := string(os.PathListSeparator)
+	parts := make([]string, 0, len(versionJSON.Libraries)+1)
+	seen := make(map[string]bool)
+
+	for _, lib := range versionJSON.Libraries {
+		if !shouldDownloadLibrary(lib) {
+			continue
+		}
+		// Skip natives: they are not jars on the classpath, they're extracted to the natives dir
+		if len(lib.Downloads.Classifiers) > 0 {
+			continue
+		}
+		artifact := lib.Downloads.Artifact
+		if artifact.Path == "" {
+			continue
+		}
+		if seen[artifact.Path] {
+			continue
+		}
+		seen[artifact.Path] = true
+		parts = append(parts, filepath.Join(librariesDir, artifact.Path))
+	}
+
+	return strings.Join(parts, sep)
+}
+
+// resolveUserType maps the stored account auth type to the value Mojang-style
+// game arguments expect (--userType). Per the launcher standard:
+//   - offline accounts use "legacy"
+//   - Microsoft accounts use "msa"
+//   - authlib-injector / Mojang Yggdrasil accounts use "mojang"
+func resolveUserType(authType string) string {
+	switch strings.ToLower(authType) {
+	case "offline":
+		return "legacy"
+	case "microsoft", "msa":
+		return "msa"
+	default:
+		return "mojang"
+	}
+}
+
+// resolveVersionType maps the stored version type to the value game arguments
+// expect (--versionType). Defaults to "release" for unknown types.
+func resolveVersionType(versionType string) string {
+	if versionType == "" {
+		return "release"
+	}
+	return versionType
+}
+
+// BuildLaunchCommand builds the Minecraft launch command per the standard:
+//   - reads <gameDir>/versions/<id>/<id>.json to obtain mainClass, assetIndex and libraries
+//   - assembles -cp with the version jar + all matching libraries
+//   - sets -Djava.library.path to the natives dir (must be populated beforehand)
+//   - prepends -javaagent:/path/authlib-injector.jar=<auth-server> when an
+//     authlib-injector account is in use and the jar path is provided
+//   - emits the standard game args (--username, --uuid, --accessToken, --userType,
+//     --version, --gameDir, --assetsDir, --assetIndex, --width, --height)
+//   - injects --tweakClass for Forge LaunchWrapper main classes
 func (l *LauncherService) BuildLaunchCommand(config models.LauncherConfig, version *models.MinecraftVersion, account *models.MinecraftAccount) ([]string, error) {
+	if version == nil {
+		return nil, fmt.Errorf("version is required")
+	}
+	if account == nil {
+		return nil, fmt.Errorf("account is required")
+	}
+
 	javaPath := config.JavaPath
 	if javaPath == "" {
 		javaPath = l.GetJavaPath()
@@ -818,75 +901,181 @@ func (l *LauncherService) BuildLaunchCommand(config models.LauncherConfig, versi
 
 	versionDir := filepath.Join(gameDir, "versions", version.VersionID)
 	jarPath := filepath.Join(versionDir, version.VersionID+".jar")
+	nativesDir := filepath.Join(versionDir, "natives")
+	librariesDir := filepath.Join(gameDir, "libraries")
 
-	nativesDir := filepath.Join(gameDir, "versions", version.VersionID, "natives")
 	if err := os.MkdirAll(nativesDir, 0755); err != nil {
+		return nil, fmt.Errorf("create natives dir: %w", err)
+	}
+
+	// Load the version JSON; fall back to safe defaults if it cannot be read.
+	versionJSON, err := l.loadVersionJSON(version.VersionID, gameDir)
+	if err != nil {
 		return nil, err
 	}
 
-	// Build classpath
-	classpath := jarPath
-
-	// Add Fabric/Forge jar to classpath
-	if version.LoaderType == "fabric" || version.LoaderType == "forge" {
-		loaderPath := filepath.Join(gameDir, "mods", version.LoaderType, version.LoaderVersion+".jar")
-		classpath = classpath + ":" + loaderPath
+	mainClass := versionJSON.MainClass
+	if mainClass == "" {
+		mainClass = "net.minecraft.client.main.Main"
 	}
 
-	args := []string{
-		javaPath,
-		"-Xmx" + fmt.Sprintf("%dM", config.MaxMemory),
-		"-Xms" + fmt.Sprintf("%dM", config.MinMemory),
+	assetIndex := versionJSON.AssetIndex.ID
+	if assetIndex == "" {
+		assetIndex = version.VersionID
 	}
 
-	// Add custom JVM args
+	// Build the classpath: <version jar> + every library (with rules applied).
+	classpathParts := []string{jarPath}
+	if libCP := buildLibraryClasspath(versionJSON, librariesDir); libCP != "" {
+		classpathParts = append(classpathParts, libCP)
+	}
+	classpath := strings.Join(classpathParts, string(os.PathListSeparator))
+
+	userType := resolveUserType(account.AuthType)
+	versionType := resolveVersionType(version.VersionType)
+
+	// JVM args
+	args := []string{javaPath}
+	if config.MaxMemory > 0 {
+		args = append(args, fmt.Sprintf("-Xmx%dM", config.MaxMemory))
+	}
+	if config.MinMemory > 0 {
+		args = append(args, fmt.Sprintf("-Xms%dM", config.MinMemory))
+	}
 	if config.JavaArgs != "" {
 		args = append(args, strings.Fields(config.JavaArgs)...)
 	}
-
-	// Add natives path
 	args = append(args, "-Djava.library.path="+nativesDir)
 
-	// Add game arguments
-	args = append(args,
-		"-cp", classpath,
-		version.MainClass,
+	// Authlib-Injector: -javaagent:/path/authlib-injector.jar=<auth-server>
+	if strings.EqualFold(account.AuthType, "authlib-injector") && config.AuthlibJar != "" && account.AuthServer != "" {
+		args = append(args, fmt.Sprintf("-javaagent:%s=%s", config.AuthlibJar, strings.TrimRight(account.AuthServer, "/")))
+	}
+
+	args = append(args, "-cp", classpath, mainClass)
+
+	// Game args per the standard
+	gameArgs := []string{
 		"--username", account.Username,
 		"--version", version.VersionID,
 		"--gameDir", gameDir,
 		"--assetsDir", filepath.Join(gameDir, "assets"),
-		"--assetIndex", version.AssetIndex,
-		"--uuid", account.UUID,
+		"--assetIndex", assetIndex,
+		"--uuid", stripDashes(account.UUID),
 		"--accessToken", account.AccessToken,
-		"--clientToken", account.ClientToken,
-		"--width", fmt.Sprintf("%d", config.GameWidth),
-		"--height", fmt.Sprintf("%d", config.GameHeight),
-	)
+		"--userType", userType,
+		"--versionType", versionType,
+	}
+	if config.GameWidth > 0 {
+		gameArgs = append(gameArgs, "--width", fmt.Sprintf("%d", config.GameWidth))
+	}
+	if config.GameHeight > 0 {
+		gameArgs = append(gameArgs, "--height", fmt.Sprintf("%d", config.GameHeight))
+	}
 
+	// Forge 1.12.x and older use LaunchWrapper and need --tweakClass
+	if strings.HasPrefix(mainClass, "net.minecraft.launchwrapper.Launch") {
+		gameArgs = append(gameArgs, "--tweakClass", "net.minecraftforge.fml.common.launcher.FMLTweaker")
+	}
+
+	args = append(args, gameArgs...)
 	return args, nil
 }
 
-// LaunchGame launches Minecraft with the given configuration
+// stripDashes removes dashes from a UUID (game expects compact form).
+func stripDashes(s string) string {
+	return strings.ReplaceAll(s, "-", "")
+}
+
+// LaunchGame launches Minecraft with the given configuration.
+//
+// The process is detached into its own process group so it survives the
+// launcher (Wails) process exiting. stdout/stderr are streamed to a log file
+// under <gameDir>/logs and the live file path is returned alongside the PID
+// so the frontend can tail it.
 func (l *LauncherService) LaunchGame(config models.LauncherConfig, version *models.MinecraftVersion, account *models.MinecraftAccount) *models.ApiResponse {
 	args, err := l.BuildLaunchCommand(config, version, account)
 	if err != nil {
 		return &models.ApiResponse{Success: false, Error: err.Error()}
 	}
 
-	// Execute the game
-	cmd := exec.Command(args[0], args[1:]...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.Dir = config.GameDir
-
-	if err := cmd.Start(); err != nil {
-		return &models.ApiResponse{Success: false, Error: err.Error()}
+	gameDir := config.GameDir
+	if gameDir == "" {
+		gameDir = l.GetMinecraftDir()
 	}
 
-	return &models.ApiResponse{Success: true, Data: map[string]interface{}{
-		"pid":  cmd.Process.Pid,
-		"args": args,
-	}}
+	logsDir := filepath.Join(gameDir, "logs")
+	if err := os.MkdirAll(logsDir, 0755); err != nil {
+		return &models.ApiResponse{Success: false, Error: fmt.Sprintf("create logs dir: %v", err)}
+	}
+	logPath := filepath.Join(logsDir, fmt.Sprintf("launcher-%s.log", time.Now().Format("20060102-150405")))
+	logFile, err := os.Create(logPath)
+	if err != nil {
+		return &models.ApiResponse{Success: false, Error: fmt.Sprintf("create log file: %v", err)}
+	}
+
+	// Write the exact command we are about to run, for debugging.
+	fmt.Fprintf(logFile, "# Minecraft launch command\n# %s\n\n", time.Now().Format(time.RFC3339))
+	for _, a := range args {
+		fmt.Fprintf(logFile, "%s ", shellQuote(a))
+	}
+	fmt.Fprintln(logFile)
+
+	cmd := exec.Command(args[0], args[1:]...)
+	cmd.Dir = gameDir
+
+	// Detach the process so it keeps running when the launcher exits.
+	// configureDetachedProcess is implemented per-platform in:
+	//   - mc_services_unix.go    (Linux / macOS)
+	//   - mc_services_windows.go (Windows)
+	configureDetachedProcess(cmd)
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		logFile.Close()
+		return &models.ApiResponse{Success: false, Error: fmt.Sprintf("stdout pipe: %v", err)}
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		logFile.Close()
+		return &models.ApiResponse{Success: false, Error: fmt.Sprintf("stderr pipe: %v", err)}
+	}
+
+	if err := cmd.Start(); err != nil {
+		logFile.Close()
+		return &models.ApiResponse{Success: false, Error: fmt.Sprintf("start game: %v", err)}
+	}
+
+	// Stream game output into the log file in the background.
+	go func() {
+		defer logFile.Close()
+		mw := io.MultiWriter(logFile)
+		go io.Copy(mw, stdout)
+		io.Copy(mw, stderr)
+		cmd.Wait()
+		fmt.Fprintf(logFile, "\n# Process exited\n")
+	}()
+
+	return &models.ApiResponse{
+		Success: true,
+		Data: map[string]interface{}{
+			"pid":      cmd.Process.Pid,
+			"args":     args,
+			"log_path": logPath,
+		},
+	}
+}
+
+// shellQuote quotes an argument for the log file so the recorded command can
+// be re-run safely. Single-quote and escape embedded single quotes.
+func shellQuote(s string) string {
+	if s == "" {
+		return "''"
+	}
+	if !strings.ContainsAny(s, " \t\n\"'\\$`&;|*?<>()[]{}#~!") {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // ==================== File Utility Service ====================

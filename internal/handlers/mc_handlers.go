@@ -3,8 +3,10 @@ package handlers
 import (
 	"crypto/md5"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 
 	"github.com/gin-gonic/gin"
 
@@ -215,6 +217,12 @@ func (h *MCHandler) GetForgeVersions(c *gin.Context) {
 // ==================== Download Handlers ====================
 
 // DownloadVersion handles POST /api/download/version
+//
+// Performs a full install of a Minecraft version per the launcher standard:
+//   1. writes <gameDir>/versions/<id>/<id>.json (required by BuildLaunchCommand)
+//   2. downloads the version JAR
+//   3. downloads every library listed in the version JSON
+//   4. extracts natives to <gameDir>/versions/<id>/natives
 type DownloadVersionRequest struct {
 	VersionID string `json:"version_id" binding:"required"`
 	GameDir   string `json:"game_dir"`
@@ -272,7 +280,33 @@ func (h *MCHandler) DownloadVersion(c *gin.Context) {
 		return
 	}
 
-	// Download version JAR
+	versionDir := gameDir + "/versions/" + req.VersionID
+	jarPath := versionDir + "/" + req.VersionID + ".jar"
+	versionJSONPath := versionDir + "/" + req.VersionID + ".json"
+	nativesDir := versionDir + "/natives"
+	librariesDir := gameDir + "/libraries"
+
+	for _, dir := range []string{versionDir, librariesDir, nativesDir} {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("create %s: %v", dir, err)})
+			return
+		}
+	}
+
+	// 1. Persist the version JSON. This is the file BuildLaunchCommand reads to
+	//    obtain mainClass, assetIndex, libraries, etc. Without it the game
+	//    cannot be launched.
+	jsonData, err := json.MarshalIndent(versionJSON, "", "  ")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "marshal version json: " + err.Error()})
+		return
+	}
+	if err := os.WriteFile(versionJSONPath, jsonData, 0644); err != nil {
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "write version json: " + err.Error()})
+		return
+	}
+
+	// 2. Download the version JAR
 	jarResult := h.bmclService.GetVersionJAR(&versionJSON)
 	if !jarResult.Success {
 		c.JSON(http.StatusBadRequest, jarResult)
@@ -287,15 +321,39 @@ func (h *MCHandler) DownloadVersion(c *gin.Context) {
 
 	jarURL := jarData["url"].(string)
 	jarSize := jarData["size"].(int64)
-	versionDir := gameDir + "/versions/" + req.VersionID
-	jarPath := versionDir + "/" + req.VersionID + ".jar"
 
-	result := h.bmclService.DownloadFile(jarURL, jarPath, jarSize, nil)
-	if result.Success {
-		c.JSON(http.StatusOK, result)
-	} else {
-		c.JSON(http.StatusBadRequest, result)
+	jarDownload := h.bmclService.DownloadFile(jarURL, jarPath, jarSize, nil)
+	if !jarDownload.Success {
+		c.JSON(http.StatusBadRequest, jarDownload)
+		return
 	}
+
+	// 3. Download every library. Required for the -cp classpath the launcher
+	//    builds in BuildLaunchCommand.
+	libDownload := h.bmclService.DownloadLibraries(versionJSON.Libraries, librariesDir, nil)
+	if !libDownload.Success {
+		c.JSON(http.StatusBadRequest, libDownload)
+		return
+	}
+
+	// 4. Extract natives (used by -Djava.library.path).
+	nativesDownload := h.bmclService.DownloadNatives(versionJSON.Libraries, nativesDir, nil)
+	if !nativesDownload.Success {
+		c.JSON(http.StatusBadRequest, nativesDownload)
+		return
+	}
+
+	c.JSON(http.StatusOK, models.ApiResponse{
+		Success: true,
+		Data: map[string]interface{}{
+			"version_id":    req.VersionID,
+			"version_dir":   versionDir,
+			"version_json":  versionJSONPath,
+			"version_jar":   jarPath,
+			"libraries_dir": librariesDir,
+			"natives_dir":   nativesDir,
+		},
+	})
 }
 
 // ==================== Launcher Handlers ====================
@@ -317,10 +375,14 @@ func (h *MCHandler) GetLauncherConfig(c *gin.Context) {
 // LaunchGame handles POST /api/launcher/launch
 type LaunchGameRequest struct {
 	VersionID     string `json:"version_id" binding:"required"`
+	VersionType   string `json:"version_type"`
 	Username      string `json:"username" binding:"required"`
 	UUID          string `json:"uuid" binding:"required"`
 	AccessToken   string `json:"access_token" binding:"required"`
 	ClientToken   string `json:"client_token" binding:"required"`
+	AuthType      string `json:"auth_type"`       // "offline" | "microsoft" | "authlib-injector"
+	AuthServer    string `json:"auth_server"`     // required when AuthType == "authlib-injector"
+	AuthlibJar    string `json:"authlib_jar"`     // absolute path to authlib-injector.jar (optional)
 	GameDir       string `json:"game_dir"`
 	JavaPath      string `json:"java_path"`
 	MaxMemory     int    `json:"max_memory"`
@@ -352,6 +414,7 @@ func (h *MCHandler) LaunchGame(c *gin.Context) {
 		GameWidth:  req.GameWidth,
 		GameHeight: req.GameHeight,
 		GameDir:    gameDir,
+		AuthlibJar: req.AuthlibJar,
 	}
 
 	if config.MaxMemory == 0 {
@@ -369,6 +432,7 @@ func (h *MCHandler) LaunchGame(c *gin.Context) {
 
 	version := &models.MinecraftVersion{
 		VersionID:     req.VersionID,
+		VersionType:   req.VersionType,
 		LoaderType:    req.LoaderType,
 		LoaderVersion: req.LoaderVersion,
 	}
@@ -378,6 +442,8 @@ func (h *MCHandler) LaunchGame(c *gin.Context) {
 		UUID:        req.UUID,
 		AccessToken: req.AccessToken,
 		ClientToken: req.ClientToken,
+		AuthType:    req.AuthType,
+		AuthServer:  req.AuthServer,
 	}
 
 	result := h.launcherService.LaunchGame(config, version, account)

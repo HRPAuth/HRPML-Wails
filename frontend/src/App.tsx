@@ -224,7 +224,7 @@ export default function App() {
           open
         >
           <Box sx={{ textAlign: 'center', py: 4 }}>
-            <Typography variant="h6" sx={{ color: 'white' }}>Minecraft Launcher</Typography>
+            <Typography variant="h6" sx={{ color: 'white' }}>Samuel Client</Typography>
           </Box>
           <List>
             {navItems.map((item) => (

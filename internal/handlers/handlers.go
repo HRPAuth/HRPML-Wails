@@ -31,7 +31,7 @@ func NewHandler() *Handler {
 func (h *Handler) Health(c *gin.Context) {
 	c.JSON(http.StatusOK, models.HealthResponse{
 		Status:  "ok",
-		Message: "Hello, Gin!",
+		Message: "Samuel Client is running",
 	})
 }
 

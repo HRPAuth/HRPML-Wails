@@ -178,6 +178,7 @@ type LauncherConfig struct {
 	GameDir        string `json:"game_dir"`        // .minecraft directory
 	JavaDir        string `json:"java_dir"`        // Java installation directory
 	BMCLAPIMirrors string `json:"bmclapi_mirrors"` // BMCLAPI mirror URLs
+	AuthlibJar     string `json:"authlib_jar"`     // Absolute path to authlib-injector.jar (optional)
 }
 
 // AuthServer represents an authlib-injector server
