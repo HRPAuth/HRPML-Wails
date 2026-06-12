@@ -14,6 +14,10 @@ import {
   Tab,
   CircularProgress,
   Alert,
+  Select,
+  MenuItem,
+  FormControl,
+  InputLabel,
 } from '@mui/material';
 import {
   Download,
@@ -52,6 +56,7 @@ export default function VersionManager({ onSelectVersion }: VersionManagerProps)
   const [downloading, setDownloading] = useState<string | null>(null);
   const [error, setError] = useState('');
   const [tabValue, setTabValue] = useState(0);
+  const [typeFilter, setTypeFilter] = useState<string>('all');
 
   useEffect(() => {
     loadInstalledVersions();
@@ -196,6 +201,31 @@ export default function VersionManager({ onSelectVersion }: VersionManagerProps)
         <Tab label="All Versions" />
       </Tabs>
 
+      {tabValue === 1 && (
+        <Box sx={{ mb: 2, display: 'flex', justifyContent: 'flex-end' }}>
+          <FormControl sx={{ minWidth: 180 }}>
+            <InputLabel sx={{ color: '#9ca3af' }}>Filter by Type</InputLabel>
+            <Select
+              value={typeFilter}
+              onChange={(e) => setTypeFilter(e.target.value)}
+              sx={{
+                color: 'white',
+                backgroundColor: '#2d3339',
+                '&:before': { borderColor: '#4CAF50' },
+                '&:after': { borderColor: '#4CAF50' },
+              }}
+              label="Filter by Type"
+            >
+              <MenuItem value="all">All</MenuItem>
+              <MenuItem value="release">Release</MenuItem>
+              <MenuItem value="snapshot">Snapshot</MenuItem>
+              <MenuItem value="old_beta">Old Beta</MenuItem>
+              <MenuItem value="old_alpha">Old Alpha</MenuItem>
+            </Select>
+          </FormControl>
+        </Box>
+      )}
+
       {error && (
         <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError('')}>
           {error}
@@ -289,7 +319,9 @@ export default function VersionManager({ onSelectVersion }: VersionManagerProps)
       ) : (
         // All versions
         <List sx={{ backgroundColor: '#282c34', borderRadius: 1 }}>
-          {versions.map((version) => (
+          {versions
+            .filter((version) => typeFilter === 'all' || version.type === typeFilter)
+            .map((version) => (
             <ListItem
               key={version.id}
               sx={{

@@ -46,7 +46,7 @@ export interface LoggedInAccount {
 }
 
 const DEFAULT_AUTH_SERVERS: AuthServer[] = [
-  { id: 'offline', name: 'Offline (Cracked)', url: '' },
+  { id: 'HRPAUTH', name: 'HRPAUTH', url: 'https://backend.auth.samuelcheston.com/' },
 ];
 
 export default function LoginView({ onLoginSuccess, onSwitchToAccounts }: LoginViewProps) {
