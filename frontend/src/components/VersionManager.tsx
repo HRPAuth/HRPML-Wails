@@ -14,8 +14,6 @@ import {
   Tab,
   CircularProgress,
   Alert,
-  ToggleButton,
-  ToggleButtonGroup,
 } from '@mui/material';
 import {
   Download,
@@ -47,8 +45,6 @@ interface VersionManagerProps {
 
 const STORAGE_KEY = 'installed_versions';
 
-type VersionTypeFilter = 'all' | 'release' | 'snapshot' | 'old_beta' | 'old_alpha';
-
 export default function VersionManager({ onSelectVersion }: VersionManagerProps) {
   const [versions, setVersions] = useState<MCVersion[]>([]);
   const [installedVersions, setInstalledVersions] = useState<InstalledVersion[]>([]);
@@ -56,7 +52,6 @@ export default function VersionManager({ onSelectVersion }: VersionManagerProps)
   const [downloading, setDownloading] = useState<string | null>(null);
   const [error, setError] = useState('');
   const [tabValue, setTabValue] = useState(0);
-  const [typeFilter, setTypeFilter] = useState<VersionTypeFilter>('all');
 
   useEffect(() => {
     loadInstalledVersions();
@@ -169,9 +164,6 @@ export default function VersionManager({ onSelectVersion }: VersionManagerProps)
     const date = new Date(dateString);
     return date.toLocaleDateString();
   };
-
-  const filteredVersions =
-    typeFilter === 'all' ? versions : versions.filter((v) => v.type === typeFilter);
 
   return (
     <Box>
@@ -296,64 +288,8 @@ export default function VersionManager({ onSelectVersion }: VersionManagerProps)
         )
       ) : (
         // All versions
-        <Box>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2, flexWrap: 'wrap' }}>
-            <Typography variant="body2" sx={{ color: '#9ca3af' }}>
-              Type:
-            </Typography>
-            <ToggleButtonGroup
-              value={typeFilter}
-              exclusive
-              onChange={(_, newValue) => {
-                if (newValue !== null) setTypeFilter(newValue);
-              }}
-              size="small"
-              aria-label="version type filter"
-              sx={{
-                '& .MuiToggleButton-root': {
-                  color: '#9ca3af',
-                  borderColor: '#4a5568',
-                  textTransform: 'none',
-                  fontSize: '0.8rem',
-                  px: 1.5,
-                  py: 0.25,
-                },
-                '& .MuiToggleButton-root.Mui-selected': {
-                  color: 'white',
-                  backgroundColor: '#4CAF50',
-                },
-                '& .MuiToggleButton-root.Mui-selected:hover': {
-                  backgroundColor: '#45a049',
-                },
-              }}
-            >
-              <ToggleButton value="all">All</ToggleButton>
-              <ToggleButton value="release">Release</ToggleButton>
-              <ToggleButton value="snapshot">Snapshot</ToggleButton>
-              <ToggleButton value="old_beta">Old Beta</ToggleButton>
-              <ToggleButton value="old_alpha">Old Alpha</ToggleButton>
-            </ToggleButtonGroup>
-            <Typography variant="caption" sx={{ color: '#6b7280', ml: 'auto' }}>
-              Showing {filteredVersions.length} of {versions.length}
-            </Typography>
-          </Box>
-
-          {filteredVersions.length === 0 ? (
-            <Paper
-              sx={{
-                p: 4,
-                textAlign: 'center',
-                backgroundColor: '#2d3339',
-                color: '#9ca3af',
-              }}
-            >
-              <Typography variant="body2">
-                No versions match the selected filter.
-              </Typography>
-            </Paper>
-          ) : (
-            <List sx={{ backgroundColor: '#282c34', borderRadius: 1 }}>
-              {filteredVersions.map((version) => (
+        <List sx={{ backgroundColor: '#282c34', borderRadius: 1 }}>
+          {versions.map((version) => (
             <ListItem
               key={version.id}
               sx={{
@@ -413,10 +349,8 @@ export default function VersionManager({ onSelectVersion }: VersionManagerProps)
                 )}
               </ListItemSecondaryAction>
             </ListItem>
-              ))}
-            </List>
-          )}
-        </Box>
+          ))}
+        </List>
       )}
     </Box>
   );

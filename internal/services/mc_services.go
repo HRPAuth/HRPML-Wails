@@ -308,13 +308,30 @@ func (b *BMCLAPIService) GetVersionList() *models.ApiResponse {
 	return &models.ApiResponse{Success: true, Data: manifest}
 }
 
+// toBMCLAPI rewrites an official Mojang resource URL to the equivalent
+// BMCLAPI mirror path. It covers both the legacy (launchermeta / launcher)
+// and the current (piston-meta / piston-data) hosts plus the assets and
+// maven hosts. See https://bmclapi.bangbang93.com/
+func (b *BMCLAPIService) toBMCLAPI(u string) string {
+	u = strings.ReplaceAll(u, "https://piston-meta.mojang.com/", b.baseURL+"/")
+	u = strings.ReplaceAll(u, "https://launchermeta.mojang.com/", b.baseURL+"/")
+	u = strings.ReplaceAll(u, "https://piston-data.mojang.com/", b.baseURL+"/")
+	u = strings.ReplaceAll(u, "https://launcher.mojang.com/", b.baseURL+"/")
+	u = strings.ReplaceAll(u, "https://resources.download.minecraft.net/", b.baseURL+"/assets/")
+	u = strings.ReplaceAll(u, "https://libraries.minecraft.net/", b.baseURL+"/maven/")
+	return u
+}
+
+// toBMCLAPIMaven rewrites a Mojang library URL to the BMCLAPI maven mirror.
+// It is a thin wrapper kept for clarity at call sites.
+func (b *BMCLAPIService) toBMCLAPIMaven(u string) string {
+	return strings.ReplaceAll(u, "https://libraries.minecraft.net/", b.baseURL+"/maven/")
+}
+
 // GetVersionManifest returns version JSON for a specific version
 // The version URL from manifest should be replaced with BMCLAPI domain
 func (b *BMCLAPIService) GetVersionManifest(versionURL string) *models.ApiResponse {
-	// Replace official URLs with BMCLAPI mirror
-	bmclURL := versionURL
-	bmclURL = strings.ReplaceAll(bmclURL, "https://launchermeta.mojang.com/", b.baseURL+"/")
-	bmclURL = strings.ReplaceAll(bmclURL, "https://launcher.mojang.com/", b.baseURL+"/")
+	bmclURL := b.toBMCLAPI(versionURL)
 
 	resp, err := b.client.Get(bmclURL)
 	if err != nil {
@@ -345,10 +362,8 @@ func (b *BMCLAPIService) GetVersionJAR(versionJSON *BMCLVersionJSON) *models.Api
 		return &models.ApiResponse{Success: false, Error: "No client download found"}
 	}
 
-	// Replace official URL with BMCLAPI mirror
-	url := clientDownload.URL
-	url = strings.ReplaceAll(url, "https://launcher.mojang.com/", b.baseURL+"/")
-	url = strings.ReplaceAll(url, "https://launchermeta.mojang.com/", b.baseURL+"/")
+	// Rewrite to BMCLAPI mirror (handles piston-data and legacy launcher)
+	url := b.toBMCLAPI(clientDownload.URL)
 
 	return &models.ApiResponse{Success: true, Data: map[string]interface{}{
 		"url":  url,
@@ -423,9 +438,8 @@ func (b *BMCLAPIService) DownloadLibraries(libraries []BMCLLibrary, libsDir stri
 		}
 
 		artifact := lib.Downloads.Artifact
-		// Replace official library URL with BMCLAPI maven mirror
-		url := artifact.URL
-		url = strings.ReplaceAll(url, "https://libraries.minecraft.net/", b.baseURL+"/maven/")
+		// Rewrite official library URL to BMCLAPI maven mirror
+		url := b.toBMCLAPIMaven(artifact.URL)
 
 		parts := strings.Split(lib.Name, ":")
 		if len(parts) != 3 {
@@ -583,10 +597,8 @@ func (b *BMCLAPIService) DownloadForgeInstaller(mcVersion, forgeVersion, targetD
 // DownloadAssets downloads game assets
 // BMCLAPI: http://resources.download.minecraft.net -> https://bmclapi2.bangbang93.com/assets
 func (b *BMCLAPIService) DownloadAssets(assetIndex *BMCLAssetIndex, assetsDir string, progressCallback func(name string, downloaded, total int64)) *models.ApiResponse {
-	// Download asset index JSON
-	assetIndexURL := assetIndex.URL
-	assetIndexURL = strings.ReplaceAll(assetIndexURL, "https://launchermeta.mojang.com/", b.baseURL+"/")
-	assetIndexURL = strings.ReplaceAll(assetIndexURL, "https://launcher.mojang.com/", b.baseURL+"/")
+	// Download asset index JSON (rewritten to BMCLAPI mirror)
+	assetIndexURL := b.toBMCLAPI(assetIndex.URL)
 
 	resp, err := b.client.Get(assetIndexURL)
 	if err != nil {
@@ -660,8 +672,7 @@ func (b *BMCLAPIService) DownloadNatives(libraries []BMCLLibrary, nativesDir str
 			continue
 		}
 
-		url := artifact.URL
-		url = strings.ReplaceAll(url, "https://libraries.minecraft.net/", b.baseURL+"/maven/")
+		url := b.toBMCLAPIMaven(artifact.URL)
 
 		// Extract the native jar
 		resp, err := b.client.Get(url)

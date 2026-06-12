@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 
 	"github.com/gin-gonic/gin"
 
@@ -219,10 +220,10 @@ func (h *MCHandler) GetForgeVersions(c *gin.Context) {
 // DownloadVersion handles POST /api/download/version
 //
 // Performs a full install of a Minecraft version per the launcher standard:
-//   1. writes <gameDir>/versions/<id>/<id>.json (required by BuildLaunchCommand)
-//   2. downloads the version JAR
-//   3. downloads every library listed in the version JSON
-//   4. extracts natives to <gameDir>/versions/<id>/natives
+//  1. writes <gameDir>/versions/<id>/<id>.json (required by BuildLaunchCommand)
+//  2. downloads the version JAR
+//  3. downloads every library listed in the version JSON
+//  4. extracts natives to <gameDir>/versions/<id>/natives
 type DownloadVersionRequest struct {
 	VersionID string `json:"version_id" binding:"required"`
 	GameDir   string `json:"game_dir"`
@@ -380,9 +381,9 @@ type LaunchGameRequest struct {
 	UUID          string `json:"uuid" binding:"required"`
 	AccessToken   string `json:"access_token" binding:"required"`
 	ClientToken   string `json:"client_token" binding:"required"`
-	AuthType      string `json:"auth_type"`       // "offline" | "microsoft" | "authlib-injector"
-	AuthServer    string `json:"auth_server"`     // required when AuthType == "authlib-injector"
-	AuthlibJar    string `json:"authlib_jar"`     // absolute path to authlib-injector.jar (optional)
+	AuthType      string `json:"auth_type"`   // "offline" | "microsoft" | "authlib-injector"
+	AuthServer    string `json:"auth_server"` // required when AuthType == "authlib-injector"
+	AuthlibJar    string `json:"authlib_jar"` // absolute path to authlib-injector.jar (optional)
 	GameDir       string `json:"game_dir"`
 	JavaPath      string `json:"java_path"`
 	MaxMemory     int    `json:"max_memory"`
@@ -461,6 +462,68 @@ func (h *MCHandler) GetMinecraftDir(c *gin.Context) {
 		Data: map[string]string{
 			"path": h.launcherService.GetMinecraftDir(),
 		},
+	})
+}
+
+// InstalledVersion describes a version present on disk under <gameDir>/versions.
+type InstalledVersion struct {
+	ID      string `json:"id"`
+	Type    string `json:"type"`
+	HasJSON bool   `json:"has_json"`
+	HasJAR  bool   `json:"has_jar"`
+}
+
+// ListInstalledVersions handles GET /api/launcher/installed-versions
+// Scans <gameDir>/versions and reports every directory that has a version JSON.
+// The frontend uses this to populate the version dropdown directly from disk
+// instead of relying on the user to maintain installed_versions in localStorage.
+func (h *MCHandler) ListInstalledVersions(c *gin.Context) {
+	gameDir := h.launcherService.GetMinecraftDir()
+	versionsDir := filepath.Join(gameDir, "versions")
+
+	entries, err := os.ReadDir(versionsDir)
+	if err != nil {
+		c.JSON(http.StatusOK, models.ApiResponse{
+			Success: true,
+			Data:    map[string]interface{}{"versions": []InstalledVersion{}},
+		})
+		return
+	}
+
+	out := []InstalledVersion{}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		id := e.Name()
+		dir := filepath.Join(versionsDir, id)
+		jsonPath := filepath.Join(dir, id+".json")
+		jarPath := filepath.Join(dir, id+".jar")
+		hasJSON := false
+		hasJAR := false
+		if fi, err := os.Stat(jsonPath); err == nil && !fi.IsDir() {
+			hasJSON = true
+		}
+		if fi, err := os.Stat(jarPath); err == nil && !fi.IsDir() {
+			hasJAR = true
+		}
+		vType := "release"
+		if hasJSON {
+			if data, err := os.ReadFile(jsonPath); err == nil {
+				var meta struct {
+					Type string `json:"type"`
+				}
+				if json.Unmarshal(data, &meta) == nil && meta.Type != "" {
+					vType = meta.Type
+				}
+			}
+		}
+		out = append(out, InstalledVersion{ID: id, Type: vType, HasJSON: hasJSON, HasJAR: hasJAR})
+	}
+
+	c.JSON(http.StatusOK, models.ApiResponse{
+		Success: true,
+		Data:    map[string]interface{}{"versions": out},
 	})
 }
 

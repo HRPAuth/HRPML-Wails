@@ -102,12 +102,34 @@ export default function HomeView({
     }
   }, [currentVersion]);
 
-  const loadVersions = () => {
+  const loadVersions = async () => {
     try {
+      // Prefer localStorage (lets the user mark versions as installed for modded setups),
+      // then fall back to a disk scan from the backend for any version that has a JSON+jar.
       const stored = localStorage.getItem('installed_versions');
-      if (stored) {
-        setVersions(JSON.parse(stored));
+      const local: InstalledVersion[] = stored ? JSON.parse(stored) : [];
+
+      try {
+        const res = await fetch('http://localhost:34501/api/v1/launcher/installed-versions');
+        const data = await res.json();
+        if (data?.success && Array.isArray(data.data?.versions)) {
+          const fromDisk: InstalledVersion[] = data.data.versions
+            .filter((v: any) => v.has_json && v.has_jar)
+            .map((v: any) => ({
+              id: v.id,
+              type: v.type || 'release',
+              installed: true,
+            }));
+          // merge, keep localStorage order, dedupe by id
+          const seen = new Set(local.map(v => v.id));
+          const merged = [...local, ...fromDisk.filter(v => !seen.has(v.id))];
+          setVersions(merged);
+          return;
+        }
+      } catch (e) {
+        console.error('Failed to query installed versions from backend:', e);
       }
+      setVersions(local);
     } catch (err) {
       console.error('Failed to load versions:', err);
     }
