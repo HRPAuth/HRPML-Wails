@@ -52,7 +52,7 @@ const DEFAULT_AUTH_SERVERS: AuthServer[] = [
 const DEFAULT_HRPAUTH_URL = 'https://backend.auth.samuelcheston.com/';
 
 export default function LoginView({ onLoginSuccess, onSwitchToAccounts }: LoginViewProps) {
-  const [authType, setAuthType] = useState<'offline' | 'authlib-injector'>('offline');
+  const [authType, setAuthType] = useState<'authlib-injector' | 'offline'>('authlib-injector');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [authServer, setAuthServer] = useState(DEFAULT_HRPAUTH_URL);
