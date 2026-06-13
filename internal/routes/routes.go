@@ -130,6 +130,18 @@ func (r *Router) setupDatabaseRoutes(rg *gin.RouterGroup) {
 			files.PUT("/:id", r.DB.UpdateFileRecord)
 			files.DELETE("/:id", r.DB.DeleteFileRecord)
 		}
+
+		// Java installation routes
+		java := db.Group("/java")
+		{
+			java.GET("", r.DB.GetAllJavaInstallations)
+			java.POST("", r.DB.CreateJavaInstallation)
+			java.GET("/:id", r.DB.GetJavaInstallation)
+			java.PUT("/:id", r.DB.UpdateJavaInstallation)
+			java.POST("/:id/default", r.DB.SetDefaultJavaInstallation)
+			java.DELETE("/:id", r.DB.DeleteJavaInstallation)
+			java.GET("/default", r.DB.GetDefaultJavaInstallation)
+		}
 	}
 }
 

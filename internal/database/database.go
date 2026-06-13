@@ -128,12 +128,23 @@ func runMigrations() error {
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		)`,
+		`CREATE TABLE IF NOT EXISTS java_installations (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			path TEXT NOT NULL,
+			friendly_name TEXT,
+			version TEXT,
+			is_default BOOLEAN DEFAULT FALSE,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
 		`CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)`,
 		`CREATE INDEX IF NOT EXISTS idx_settings_key ON settings(key)`,
 		`CREATE INDEX IF NOT EXISTS idx_logs_level ON logs(level)`,
 		`CREATE INDEX IF NOT EXISTS idx_logs_created_at ON logs(created_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)`,
 		`CREATE INDEX IF NOT EXISTS idx_files_path ON files(path)`,
+		`CREATE INDEX IF NOT EXISTS idx_java_path ON java_installations(path)`,
+		`CREATE INDEX IF NOT EXISTS idx_java_default ON java_installations(is_default)`,
 	}
 
 	for _, migration := range migrations {

@@ -204,3 +204,14 @@ const (
 	DownloadStatusFailed      = "failed"
 	DownloadStatusCancelled   = "cancelled"
 )
+
+// JavaInstallation represents a Java installation
+type JavaInstallation struct {
+	ID           int64     `json:"id"`
+	Path         string    `json:"path"`          // Path to java executable
+	FriendlyName string    `json:"friendly_name"` // User-friendly name
+	Version      string    `json:"version"`       // Detected Java version
+	IsDefault    bool      `json:"is_default"`    // Is this the default Java
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}

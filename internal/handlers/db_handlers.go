@@ -1,8 +1,12 @@
 package handlers
 
 import (
+	"bytes"
+	"fmt"
 	"net/http"
+	"os/exec"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -18,6 +22,7 @@ type DBHandler struct {
 	logRepo     *repository.LogRepository
 	taskRepo    *repository.TaskRepository
 	fileRepo    *repository.FileRepository
+	javaRepo    *repository.JavaRepository
 }
 
 // NewDBHandler creates a new DBHandler
@@ -28,6 +33,7 @@ func NewDBHandler() *DBHandler {
 		logRepo:     repository.NewLogRepository(),
 		taskRepo:    repository.NewTaskRepository(),
 		fileRepo:    repository.NewFileRepository(),
+		javaRepo:    repository.NewJavaRepository(),
 	}
 }
 
@@ -518,4 +524,191 @@ func (h *DBHandler) GetDBSchema(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"success": true, "data": schema})
+}
+
+// ========== Java Installation Handlers ==========
+
+// detectJavaVersion runs java -version and extracts the version string
+func detectJavaVersion(javaPath string) (string, error) {
+	var stdout, stderr bytes.Buffer
+	cmd := exec.Command(javaPath, "-version")
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+	if err != nil {
+		return "", fmt.Errorf("failed to run java -version: %w", err)
+	}
+
+	output := stderr.String()
+	if output == "" {
+		output = stdout.String()
+	}
+
+	lines := strings.Split(output, "\n")
+	for _, line := range lines {
+		if strings.Contains(line, "version") {
+			parts := strings.Split(line, "\"")
+			if len(parts) >= 2 {
+				return strings.TrimSpace(parts[1]), nil
+			}
+		}
+	}
+
+	return "Unknown", nil
+}
+
+// CreateJavaInstallation handles POST /db/java
+func (h *DBHandler) CreateJavaInstallation(c *gin.Context) {
+	var req struct {
+		Path         string `json:"path"`
+		FriendlyName string `json:"friendly_name"`
+	}
+
+	if err := c.BindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: err.Error()})
+		return
+	}
+
+	if req.Path == "" {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "path is required"})
+		return
+	}
+
+	version, err := detectJavaVersion(req.Path)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Failed to detect Java version: " + err.Error()})
+		return
+	}
+
+	java := &models.JavaInstallation{
+		Path:         req.Path,
+		FriendlyName: req.FriendlyName,
+		Version:      version,
+		IsDefault:    false,
+	}
+
+	if err := h.javaRepo.Create(java); err != nil {
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusCreated, java)
+}
+
+// GetJavaInstallation handles GET /db/java/:id
+func (h *DBHandler) GetJavaInstallation(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "invalid java installation id"})
+		return
+	}
+
+	java, err := h.javaRepo.GetByID(id)
+	if err != nil {
+		c.JSON(http.StatusNotFound, models.ErrorResponse{Error: err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, java)
+}
+
+// GetAllJavaInstallations handles GET /db/java
+func (h *DBHandler) GetAllJavaInstallations(c *gin.Context) {
+	javas, err := h.javaRepo.GetAll()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, javas)
+}
+
+// GetDefaultJavaInstallation handles GET /db/java/default
+func (h *DBHandler) GetDefaultJavaInstallation(c *gin.Context) {
+	java, err := h.javaRepo.GetDefault()
+	if err != nil {
+		c.JSON(http.StatusNotFound, models.ErrorResponse{Error: err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, java)
+}
+
+// UpdateJavaInstallation handles PUT /db/java/:id
+func (h *DBHandler) UpdateJavaInstallation(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "invalid java installation id"})
+		return
+	}
+
+	var req struct {
+		Path         string `json:"path"`
+		FriendlyName string `json:"friendly_name"`
+	}
+
+	if err := c.BindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: err.Error()})
+		return
+	}
+
+	java, err := h.javaRepo.GetByID(id)
+	if err != nil {
+		c.JSON(http.StatusNotFound, models.ErrorResponse{Error: err.Error()})
+		return
+	}
+
+	if req.Path != "" {
+		java.Path = req.Path
+		version, err := detectJavaVersion(req.Path)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Failed to detect Java version: " + err.Error()})
+			return
+		}
+		java.Version = version
+	}
+
+	if req.FriendlyName != "" {
+		java.FriendlyName = req.FriendlyName
+	}
+
+	if err := h.javaRepo.Update(java); err != nil {
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, java)
+}
+
+// SetDefaultJavaInstallation handles POST /db/java/:id/default
+func (h *DBHandler) SetDefaultJavaInstallation(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "invalid java installation id"})
+		return
+	}
+
+	if err := h.javaRepo.SetDefault(id); err != nil {
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "message": "java installation set as default"})
+}
+
+// DeleteJavaInstallation handles DELETE /db/java/:id
+func (h *DBHandler) DeleteJavaInstallation(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "invalid java installation id"})
+		return
+	}
+
+	if err := h.javaRepo.Delete(id); err != nil {
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "message": "java installation deleted"})
 }

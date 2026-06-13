@@ -413,6 +413,107 @@ func (r *FileRepository) DeleteOld(days int) error {
 	return err
 }
 
+// JavaRepository handles Java installation database operations
+type JavaRepository struct{}
+
+// NewJavaRepository creates a new JavaRepository
+func NewJavaRepository() *JavaRepository {
+	return &JavaRepository{}
+}
+
+// Create creates a new Java installation
+func (r *JavaRepository) Create(java *models.JavaInstallation) error {
+	query := `INSERT INTO java_installations (path, friendly_name, version, is_default) VALUES (?, ?, ?, ?)`
+	result, err := database.GetDB().Exec(query, java.Path, java.FriendlyName, java.Version, java.IsDefault)
+	if err != nil {
+		return fmt.Errorf("failed to create java installation: %w", err)
+	}
+	java.ID, _ = result.LastInsertId()
+	return nil
+}
+
+// GetByID retrieves a Java installation by ID
+func (r *JavaRepository) GetByID(id int64) (*models.JavaInstallation, error) {
+	java := &models.JavaInstallation{}
+	query := `SELECT id, path, friendly_name, version, is_default, created_at, updated_at FROM java_installations WHERE id = ?`
+	err := database.GetDB().QueryRow(query, id).Scan(
+		&java.ID, &java.Path, &java.FriendlyName, &java.Version, &java.IsDefault, &java.CreatedAt, &java.UpdatedAt,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("java installation not found: %w", err)
+	}
+	return java, nil
+}
+
+// GetAll retrieves all Java installations
+func (r *JavaRepository) GetAll() ([]models.JavaInstallation, error) {
+	query := `SELECT id, path, friendly_name, version, is_default, created_at, updated_at FROM java_installations ORDER BY created_at DESC`
+	rows, err := database.GetDB().Query(query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get java installations: %w", err)
+	}
+	defer rows.Close()
+
+	var javas []models.JavaInstallation
+	for rows.Next() {
+		var java models.JavaInstallation
+		if err := rows.Scan(&java.ID, &java.Path, &java.FriendlyName, &java.Version, &java.IsDefault, &java.CreatedAt, &java.UpdatedAt); err != nil {
+			return nil, err
+		}
+		javas = append(javas, java)
+	}
+	return javas, nil
+}
+
+// GetDefault retrieves the default Java installation
+func (r *JavaRepository) GetDefault() (*models.JavaInstallation, error) {
+	java := &models.JavaInstallation{}
+	query := `SELECT id, path, friendly_name, version, is_default, created_at, updated_at FROM java_installations WHERE is_default = 1`
+	err := database.GetDB().QueryRow(query).Scan(
+		&java.ID, &java.Path, &java.FriendlyName, &java.Version, &java.IsDefault, &java.CreatedAt, &java.UpdatedAt,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("default java installation not found: %w", err)
+	}
+	return java, nil
+}
+
+// Update updates a Java installation
+func (r *JavaRepository) Update(java *models.JavaInstallation) error {
+	query := `UPDATE java_installations SET path = ?, friendly_name = ?, version = ?, is_default = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+	_, err := database.GetDB().Exec(query, java.Path, java.FriendlyName, java.Version, java.IsDefault, java.ID)
+	return err
+}
+
+// SetDefault sets a Java installation as the default
+func (r *JavaRepository) SetDefault(id int64) error {
+	tx, err := database.GetDB().Begin()
+	if err != nil {
+		return err
+	}
+
+	_, err = tx.Exec(`UPDATE java_installations SET is_default = 0`)
+	if err != nil {
+		tx.Rollback()
+		return err
+	}
+
+	_, err = tx.Exec(`UPDATE java_installations SET is_default = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, id)
+	if err != nil {
+		tx.Rollback()
+		return err
+	}
+
+	return tx.Commit()
+}
+
+// Delete deletes a Java installation
+func (r *JavaRepository) Delete(id int64) error {
+	query := `DELETE FROM java_installations WHERE id = ?`
+	_, err := database.GetDB().Exec(query, id)
+	return err
+}
+
 // Stats returns database statistics
 func Stats() (map[string]int64, error) {
 	stats := make(map[string]int64)
