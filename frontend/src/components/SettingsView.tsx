@@ -288,16 +288,41 @@ export default function SettingsView() {
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
             <div>
               <Typography sx={{ color: '#9ca3af', fontSize: '0.875rem' }}>Java Path</Typography>
-              <Chip
-                label={config?.java_path || 'Not configured'}
-                sx={{
-                  backgroundColor: '#374151',
-                  color: 'white',
-                  marginTop: 1,
-                  maxWidth: '100%',
-                  wordBreak: 'break-all'
-                }}
-              />
+              {(() => {
+                const defaultJava = javaInstallations.find(j => j.is_default);
+                return defaultJava ? (
+                  <Box sx={{ marginTop: 1 }}>
+                    <Typography sx={{ color: 'white', fontWeight: 'bold' }}>
+                      {defaultJava.friendly_name || `Java ${defaultJava.version}`}
+                    </Typography>
+                    <Typography sx={{ color: '#9ca3af', fontSize: '0.875rem' }}>
+                      Version: {defaultJava.version}
+                    </Typography>
+                    <Chip
+                      label={defaultJava.path}
+                      sx={{
+                        backgroundColor: '#1f2937',
+                        color: '#d1d5db',
+                        marginTop: 1,
+                        maxWidth: '100%',
+                        wordBreak: 'break-all',
+                        fontSize: '0.75rem'
+                      }}
+                    />
+                  </Box>
+                ) : (
+                  <Chip
+                    label={config?.java_path || 'Not configured'}
+                    sx={{
+                      backgroundColor: '#374151',
+                      color: 'white',
+                      marginTop: 1,
+                      maxWidth: '100%',
+                      wordBreak: 'break-all'
+                    }}
+                  />
+                );
+              })()}
             </div>
 
             <div>

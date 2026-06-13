@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"net/http"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -621,7 +622,76 @@ func (h *DBHandler) GetAllJavaInstallations(c *gin.Context) {
 		return
 	}
 
+	// If no Java installations exist, auto-detect system Java
+	if len(javas) == 0 {
+		systemJavaPath := detectSystemJava()
+		if systemJavaPath != "" {
+			version, _ := detectJavaVersion(systemJavaPath)
+			defaultJava := &models.JavaInstallation{
+				Path:         systemJavaPath,
+				FriendlyName: "System Default Java",
+				Version:      version,
+				IsDefault:    true,
+			}
+			if err := h.javaRepo.Create(defaultJava); err == nil {
+				javas = []models.JavaInstallation{*defaultJava}
+			}
+		}
+	}
+
 	c.JSON(http.StatusOK, javas)
+}
+
+// detectSystemJava attempts to find the system Java executable
+func detectSystemJava() string {
+	// Common Java locations on Linux
+	linuxPaths := []string{
+		"/usr/bin/java",
+		"/usr/lib/jvm/java-17-openjdk-amd64/bin/java",
+		"/usr/lib/jvm/java-11-openjdk-amd64/bin/java",
+		"/usr/lib/jvm/java-21-openjdk-amd64/bin/java",
+		"/usr/lib/jvm/default-java/bin/java",
+		"/opt/java/openjdk/bin/java",
+	}
+
+	// Common Java locations on Windows
+	windowsPaths := []string{
+		"C:\\Program Files\\Java\\jdk17\\bin\\java.exe",
+		"C:\\Program Files\\Java\\jdk11\\bin\\java.exe",
+		"C:\\Program Files\\Java\\jdk21\\bin\\java.exe",
+		"C:\\Program Files\\Java\\jre\\bin\\java.exe",
+		"C:\\Program Files (x86)\\Java\\jre\\bin\\java.exe",
+	}
+
+	// Try to find java in PATH
+	var stdout bytes.Buffer
+	cmd := exec.Command("which", "java")
+	cmd.Stdout = &stdout
+	if err := cmd.Run(); err == nil {
+		path := strings.TrimSpace(stdout.String())
+		if path != "" {
+			// Verify it's executable
+			if _, err := exec.LookPath(path); err == nil {
+				return path
+			}
+		}
+	}
+
+	// Check common Linux paths
+	for _, path := range linuxPaths {
+		if _, err := exec.LookPath(path); err == nil {
+			return path
+		}
+	}
+
+	// Check common Windows paths
+	for _, path := range windowsPaths {
+		if _, err := os.Stat(path); err == nil {
+			return path
+		}
+	}
+
+	return ""
 }
 
 // GetDefaultJavaInstallation handles GET /db/java/default

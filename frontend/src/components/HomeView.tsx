@@ -37,6 +37,14 @@ interface ModLoader {
   version: string;
 }
 
+interface JavaInstallation {
+  id: number;
+  path: string;
+  friendly_name: string;
+  version: string;
+  is_default: boolean;
+}
+
 interface LogEntry {
   id: number;
   level: string;
@@ -90,11 +98,32 @@ export default function HomeView({
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [showLogs, setShowLogs] = useState(false);
   const [logsLoading, setLogsLoading] = useState(false);
+  const [javaInstallations, setJavaInstallations] = useState<JavaInstallation[]>([]);
+  const [selectedJava, setSelectedJava] = useState<JavaInstallation | null>(null);
 
   useEffect(() => {
     loadVersions();
     loadSettings();
+    loadJavaInstallations();
   }, []);
+
+  const loadJavaInstallations = async () => {
+    try {
+      const response = await fetch('http://localhost:34501/api/v1/db/java');
+      const data = await response.json();
+      if (Array.isArray(data)) {
+        setJavaInstallations(data);
+        const defaultJava = data.find((j: JavaInstallation) => j.is_default);
+        if (defaultJava) {
+          setSelectedJava(defaultJava);
+        } else if (data.length > 0) {
+          setSelectedJava(data[0]);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to load Java installations:', err);
+    }
+  };
 
   useEffect(() => {
     if (currentVersion) {
@@ -365,6 +394,36 @@ export default function HomeView({
                   {l.name === 'none' ? 'None' : l.name.replace('-', ' ')}
                 </MenuItem>
               ))}
+            </Select>
+          </FormControl>
+
+          <FormControl fullWidth sx={{ mb: 3 }}>
+            <InputLabel sx={{ color: '#9ca3af' }}>Java</InputLabel>
+            <Select
+              value={selectedJava?.id || ''}
+              onChange={(e) => {
+                const java = javaInstallations.find(j => j.id === e.target.value);
+                setSelectedJava(java || null);
+              }}
+              label="Java"
+              sx={{
+                color: 'white',
+                '.MuiOutlinedInput-notchedOutline': { borderColor: '#4a5568' },
+                '&:hover .MuiOutlinedInput-notchedOutline': { borderColor: '#4CAF50' },
+                '.MuiSvgIcon-root': { color: '#9ca3af' },
+              }}
+            >
+              {javaInstallations.length === 0 ? (
+                <MenuItem disabled value="">
+                  No Java installed
+                </MenuItem>
+              ) : (
+                javaInstallations.map((j) => (
+                  <MenuItem key={j.id} value={j.id}>
+                    {j.friendly_name || `Java ${j.version}`} ({j.version})
+                  </MenuItem>
+                ))
+              )}
             </Select>
           </FormControl>
 
