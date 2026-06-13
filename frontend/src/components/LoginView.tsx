@@ -49,11 +49,13 @@ const DEFAULT_AUTH_SERVERS: AuthServer[] = [
   { id: 'HRPAUTH', name: 'HRPAUTH', url: 'https://backend.auth.samuelcheston.com/' },
 ];
 
+const DEFAULT_HRPAUTH_URL = 'https://backend.auth.samuelcheston.com/';
+
 export default function LoginView({ onLoginSuccess, onSwitchToAccounts }: LoginViewProps) {
   const [authType, setAuthType] = useState<'offline' | 'authlib-injector'>('offline');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const [authServer, setAuthServer] = useState('');
+  const [authServer, setAuthServer] = useState(DEFAULT_HRPAUTH_URL);
   const [customAuthServer, setCustomAuthServer] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -66,6 +68,9 @@ export default function LoginView({ onLoginSuccess, onSwitchToAccounts }: LoginV
     setError('');
     if (type === 'offline') {
       setAuthServer('offline');
+    } else {
+      // Auto-select HRPAUTH as default when switching to authlib-injector
+      setAuthServer(DEFAULT_HRPAUTH_URL);
     }
   };
 
@@ -210,10 +215,7 @@ export default function LoginView({ onLoginSuccess, onSwitchToAccounts }: LoginV
       >
         <Box sx={{ textAlign: 'center', mb: 3 }}>
           <Typography variant="h4" component="h1" sx={{ color: '#4CAF50', fontWeight: 'bold', mb: 1 }}>
-            Minecraft Launcher
-          </Typography>
-          <Typography variant="body2" sx={{ color: '#9ca3af' }}>
-            Sign in to play
+            Login with HRPAUTH
           </Typography>
         </Box>
 
@@ -231,8 +233,8 @@ export default function LoginView({ onLoginSuccess, onSwitchToAccounts }: LoginV
                 '.MuiSvgIcon-root': { color: '#9ca3af' },
               }}
             >
+              <MenuItem value="authlib-injector">Yggdrasil API</MenuItem>
               <MenuItem value="offline">Offline (Cracked)</MenuItem>
-              <MenuItem value="authlib-injector">Authlib Injector</MenuItem>
             </Select>
           </FormControl>
 
