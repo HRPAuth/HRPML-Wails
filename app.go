@@ -106,3 +106,8 @@ func (a *App) TestAPICall(endpoint string) *models.ApiResponse {
 func (a *App) GetDBPath() string {
 	return database.DefaultConfig().Path
 }
+
+// GetDBSchema calls the backend API to get the database schema
+func (a *App) GetDBSchema() *models.ApiResponse {
+	return a.httpClient.Get("/api/v1/db/schema")
+}

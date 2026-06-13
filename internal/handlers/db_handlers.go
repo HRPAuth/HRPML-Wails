@@ -6,6 +6,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"HRPMLW/internal/database"
 	"HRPMLW/internal/models"
 	"HRPMLW/internal/repository"
 )
@@ -506,4 +507,15 @@ func (h *DBHandler) CleanupDB(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"success": true, "message": "database cleaned up"})
+}
+
+// GetDBSchema handles GET /db/schema
+func (h *DBHandler) GetDBSchema(c *gin.Context) {
+	schema, err := database.GetSchema()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": schema})
 }

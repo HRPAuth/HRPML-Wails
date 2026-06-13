@@ -77,9 +77,10 @@ func (r *Router) Setup() {
 func (r *Router) setupDatabaseRoutes(rg *gin.RouterGroup) {
 	db := rg.Group("/db")
 	{
-		// Database stats and cleanup
+		// Database stats, cleanup, and schema
 		db.GET("/stats", r.DB.GetDBStats)
 		db.POST("/cleanup", r.DB.CleanupDB)
+		db.GET("/schema", r.DB.GetDBSchema)
 
 		// User routes
 		users := db.Group("/users")
