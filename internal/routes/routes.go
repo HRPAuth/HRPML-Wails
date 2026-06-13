@@ -140,6 +140,7 @@ func (r *Router) setupMCRoutes(rg *gin.RouterGroup) {
 		auth.GET("/meta", r.MC.GetAuthlibMeta)
 		auth.POST("/login", r.MC.AuthlibLogin)
 		auth.POST("/refresh", r.MC.AuthlibRefresh)
+		auth.POST("/validate", r.MC.AuthlibValidate)
 		auth.POST("/offline", r.MC.OfflineLogin)
 	}
 

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -78,9 +79,10 @@ func (h *MCHandler) AuthlibLogin(c *gin.Context) {
 
 // AuthlibRefresh handles POST /api/auth/refresh
 type AuthlibRefreshRequest struct {
-	Server      string `json:"server" binding:"required"`
-	AccessToken string `json:"access_token" binding:"required"`
-	ClientToken string `json:"client_token" binding:"required"`
+	Server           string `json:"server" binding:"required"`
+	AccessToken      string `json:"access_token" binding:"required"`
+	ClientToken      string `json:"client_token" binding:"required"`
+	SelectedProfileID string `json:"selected_profile_id"`
 }
 
 func (h *MCHandler) AuthlibRefresh(c *gin.Context) {
@@ -90,12 +92,36 @@ func (h *MCHandler) AuthlibRefresh(c *gin.Context) {
 		return
 	}
 
-	result := h.authService.RefreshAuthlibToken(req.Server, req.AccessToken, req.ClientToken)
+	result := h.authService.RefreshAuthlibTokenWithProfile(req.Server, req.AccessToken, req.ClientToken, req.SelectedProfileID)
 	if result.Success {
 		c.JSON(http.StatusOK, result)
 	} else {
 		c.JSON(http.StatusUnauthorized, result)
 	}
+}
+
+// AuthlibValidate handles POST /api/auth/validate
+//
+// Per the authlib-injector wiki, POST /authserver/validate returns 204 on
+// success and 403 ForbiddenOperationException("Invalid token.") on failure.
+// This is the launcher's pre-launch token-validity check.
+type AuthlibValidateRequest struct {
+	Server      string `json:"server" binding:"required"`
+	AccessToken string `json:"access_token" binding:"required"`
+	ClientToken string `json:"client_token"`
+}
+
+func (h *MCHandler) AuthlibValidate(c *gin.Context) {
+	var req AuthlibValidateRequest
+	if err := c.BindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: err.Error()})
+		return
+	}
+
+	result := h.authService.ValidateAuthlibToken(req.Server, req.AccessToken, req.ClientToken)
+	// 200 with success=true mirrors the other auth endpoints; callers that
+	// need the exact 204/403 distinction can inspect result.Success / Error.
+	c.JSON(http.StatusOK, result)
 }
 
 // OfflineLogin handles POST /api/auth/offline
@@ -384,6 +410,7 @@ type LaunchGameRequest struct {
 	AuthType      string `json:"auth_type"`   // "offline" | "microsoft" | "authlib-injector"
 	AuthServer    string `json:"auth_server"` // required when AuthType == "authlib-injector"
 	AuthlibJar    string `json:"authlib_jar"` // absolute path to authlib-injector.jar (optional)
+	AuthlibMeta   string `json:"authlib_meta"` // raw API metadata JSON; auto-fetched if empty
 	GameDir       string `json:"game_dir"`
 	JavaPath      string `json:"java_path"`
 	MaxMemory     int    `json:"max_memory"`
@@ -407,15 +434,33 @@ func (h *MCHandler) LaunchGame(c *gin.Context) {
 		gameDir = h.launcherService.GetMinecraftDir()
 	}
 
+	// 配置预获取: if the caller didn't supply the metadata JSON, fetch it
+	// from the authlib server. The wiki lists this as a required pre-launch
+	// step (it speeds up startup and prevents crashes on network failure).
+	authlibMeta := req.AuthlibMeta
+	if authlibMeta == "" && strings.EqualFold(req.AuthType, "authlib-injector") && req.AuthServer != "" {
+		metaResult := h.authService.GetAuthlibMeta(req.AuthServer)
+		if metaResult.Success {
+			if data, ok := metaResult.Data.(map[string]interface{}); ok {
+				if raw, ok := data["raw"].(string); ok {
+					authlibMeta = raw
+				}
+			}
+		}
+		// If the fetch fails we still try to launch — the game can fall
+		// back to a runtime fetch by authlib-injector itself.
+	}
+
 	config := models.LauncherConfig{
-		JavaPath:   req.JavaPath,
-		MaxMemory:  req.MaxMemory,
-		MinMemory:  req.MinMemory,
-		JavaArgs:   req.JavaArgs,
-		GameWidth:  req.GameWidth,
-		GameHeight: req.GameHeight,
-		GameDir:    gameDir,
-		AuthlibJar: req.AuthlibJar,
+		JavaPath:        req.JavaPath,
+		MaxMemory:       req.MaxMemory,
+		MinMemory:       req.MinMemory,
+		JavaArgs:        req.JavaArgs,
+		GameWidth:       req.GameWidth,
+		GameHeight:      req.GameHeight,
+		GameDir:         gameDir,
+		AuthlibJar:      req.AuthlibJar,
+		AuthlibMetaJSON: authlibMeta,
 	}
 
 	if config.MaxMemory == 0 {

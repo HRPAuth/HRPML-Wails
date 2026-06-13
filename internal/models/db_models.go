@@ -179,6 +179,11 @@ type LauncherConfig struct {
 	JavaDir        string `json:"java_dir"`        // Java installation directory
 	BMCLAPIMirrors string `json:"bmclapi_mirrors"` // BMCLAPI mirror URLs
 	AuthlibJar     string `json:"authlib_jar"`     // Absolute path to authlib-injector.jar (optional)
+	// AuthlibMetaJSON is the raw metadata JSON returned by the authlib
+	// server's GET / endpoint. When launching an authlib-injector account
+	// it is Base64-encoded into -Dauthlibinjector.yggdrasil.prefetched per
+	// the authlib-injector wiki (配置预获取). Leave empty to skip prefetching.
+	AuthlibMetaJSON string `json:"authlib_meta_json,omitempty"`
 }
 
 // AuthServer represents an authlib-injector server

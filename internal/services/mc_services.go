@@ -4,11 +4,13 @@ import (
 	"archive/zip"
 	"bufio"
 	"crypto/md5"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -33,25 +35,45 @@ func NewAuthService() *AuthService {
 	}
 }
 
-// AuthlibServerMeta represents authlib-injector server metadata
+// AuthlibServerMeta represents authlib-injector server metadata.
+//
+// Per the authlib-injector wiki (API Metadata Retrieval, GET /), the response
+// nests serverName / implementationName / implementationVersion / links inside
+// a `meta` object, while signaturePublickey and skinDomains live at the top
+// level. The `meta` object itself is free-form; only the keys below are
+// recognised.
 type AuthlibServerMeta struct {
-	ServerName            string `json:"serverName"`
-	ImplementationName    string `json:"implementationName"`
-	ImplementationVersion string `json:"implementationVersion"`
-	Links                 struct {
-		Homepage string `json:"homepage"`
-		Register string `json:"register"`
-	} `json:"links"`
+	Meta struct {
+		ServerName            string `json:"serverName"`
+		ImplementationName    string `json:"implementationName"`
+		ImplementationVersion string `json:"implementationVersion"`
+		Links                 struct {
+			Homepage string `json:"homepage"`
+			Register string `json:"register"`
+		} `json:"links"`
+		// Feature flags live in `meta` and use dotted keys, e.g.
+		// "feature.non_email_login". We expose the most relevant one and
+		// leave the rest as a passthrough map.
+		Features map[string]bool `json:"-"`
+	} `json:"meta"`
 	SignaturePublickey string   `json:"signaturePublickey"`
 	SkinDomains        []string `json:"skinDomains"`
 }
 
 // AuthlibAuthRequest represents authentication request to authlib-injector
+//
+// Per the wiki, the request body MUST include `agent: {name, version}` and
+// `requestUser` (set to true so the launcher can update the stored user ID /
+// properties per the launcher technical spec).
 type AuthlibAuthRequest struct {
 	Username    string `json:"username"`
 	Password    string `json:"password"`
 	ClientToken string `json:"clientToken,omitempty"`
 	RequestUser bool   `json:"requestUser"`
+	Agent       struct {
+		Name    string `json:"name"`
+		Version int    `json:"version"`
+	} `json:"agent"`
 }
 
 // AuthlibAuthResponse represents authentication response from authlib-injector
@@ -63,42 +85,121 @@ type AuthlibAuthResponse struct {
 	User              *AuthlibUser     `json:"user,omitempty"`
 }
 
+// AuthlibProfile represents a Minecraft profile (player character).
+//
+// Per the wiki, `properties` (and per-property `signature`) is included only in
+// specific cases (e.g. refresh responses, profile lookups), so it is optional.
 type AuthlibProfile struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
+	ID         string            `json:"id"`
+	Name       string            `json:"name"`
+	Properties []AuthlibProperty `json:"properties,omitempty"`
+}
+
+// AuthlibProperty is a single name/value (and optional signature) entry of a
+// profile or user `properties` array.
+type AuthlibProperty struct {
+	Name      string `json:"name"`
+	Value     string `json:"value"`
+	Signature string `json:"signature,omitempty"`
 }
 
 type AuthlibUser struct {
-	ID         string `json:"id"`
-	Properties []struct {
-		Name  string `json:"name"`
-		Value string `json:"value"`
-	} `json:"properties"`
+	ID         string            `json:"id"`
+	Properties []AuthlibProperty `json:"properties"`
 }
 
-// GetAuthlibMeta fetches authlib-injector server metadata
-func (a *AuthService) GetAuthlibMeta(authServerURL string) *models.ApiResponse {
-	url := strings.TrimSuffix(authServerURL, "/") + "/"
-
-	resp, err := a.client.Get(url)
+// getMetaWithRedirects performs a GET to metaURL, following the authlib
+// API Location Indication (ALI) protocol:
+//
+//  1. If the response carries an X-Authlib-Injector-API-Location header, the
+//     value (absolute or relative) becomes the new API URL.
+//  2. Otherwise, the response body itself is the metadata and metaURL is the
+//     resolved API URL.
+//
+// The returned raw JSON is the metadata body the caller should pass to
+// -Dauthlibinjector.yggdrasil.prefetched (Base64-encoded) at launch time.
+func (a *AuthService) getMetaWithRedirects(metaURL string) (*AuthlibServerMeta, []byte, string, error) {
+	resp, err := a.client.Get(metaURL)
 	if err != nil {
-		return &models.ApiResponse{Success: false, Error: err.Error()}
+		return nil, nil, "", err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return &models.ApiResponse{Success: false, Error: fmt.Sprintf("HTTP %d", resp.StatusCode)}
+		return nil, nil, "", fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+
+	if ali := resp.Header.Get("X-Authlib-Injector-API-Location"); ali != "" {
+		newURL, err := resolveALI(metaURL, ali)
+		if err != nil {
+			return nil, nil, "", err
+		}
+		// Re-fetch from the resolved URL so the caller gets the real
+		// metadata body, not the homepage.
+		if newURL != metaURL {
+			return a.getMetaWithRedirects(newURL)
+		}
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, nil, "", err
 	}
 
 	var meta AuthlibServerMeta
-	if err := json.NewDecoder(resp.Body).Decode(&meta); err != nil {
+	if err := json.Unmarshal(body, &meta); err != nil {
+		return nil, nil, "", err
+	}
+	return &meta, body, metaURL, nil
+}
+
+// resolveALI converts an X-Authlib-Injector-API-Location header value into an
+// absolute URL, relative to the request URL.
+func resolveALI(requestURL, ali string) (string, error) {
+	ali = strings.TrimSpace(ali)
+	if ali == "" {
+		return requestURL, nil
+	}
+	if strings.HasPrefix(ali, "http://") || strings.HasPrefix(ali, "https://") {
+		return ali, nil
+	}
+	base, err := url.Parse(requestURL)
+	if err != nil {
+		return "", err
+	}
+	ref, err := url.Parse(ali)
+	if err != nil {
+		return "", err
+	}
+	return base.ResolveReference(ref).String(), nil
+}
+
+// GetAuthlibMeta fetches authlib-injector server metadata.
+//
+// Returns the decoded struct, the raw JSON body (so the launcher can pass it
+// to -Dauthlibinjector.yggdrasil.prefetched) and the resolved API URL.
+func (a *AuthService) GetAuthlibMeta(authServerURL string) *models.ApiResponse {
+	metaURL := strings.TrimSuffix(authServerURL, "/") + "/"
+
+	meta, rawBody, resolvedURL, err := a.getMetaWithRedirects(metaURL)
+	if err != nil {
 		return &models.ApiResponse{Success: false, Error: err.Error()}
 	}
 
-	return &models.ApiResponse{Success: true, Data: meta}
+	return &models.ApiResponse{
+		Success: true,
+		Data: map[string]interface{}{
+			"meta":         meta,
+			"raw":          string(rawBody),
+			"resolved_url": resolvedURL,
+		},
+	}
 }
 
 // AuthenticateWithAuthlib authenticates with an authlib-injector server
+//
+// Per the wiki, the request MUST include `agent: {name:"Minecraft", version:1}`
+// and `requestUser: true` so the launcher receives the user object.
 func (a *AuthService) AuthenticateWithAuthlib(authServerURL, username, password, clientToken string) *models.ApiResponse {
 	url := strings.TrimSuffix(authServerURL, "/") + "/authserver/authenticate"
 
@@ -108,6 +209,8 @@ func (a *AuthService) AuthenticateWithAuthlib(authServerURL, username, password,
 		ClientToken: clientToken,
 		RequestUser: true,
 	}
+	reqBody.Agent.Name = "Minecraft"
+	reqBody.Agent.Version = 1
 
 	jsonData, err := json.Marshal(reqBody)
 	if err != nil {
@@ -118,7 +221,7 @@ func (a *AuthService) AuthenticateWithAuthlib(authServerURL, username, password,
 	if err != nil {
 		return &models.ApiResponse{Success: false, Error: err.Error()}
 	}
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Type", "application/json; charset=utf-8")
 
 	resp, err := a.client.Do(req)
 	if err != nil {
@@ -143,13 +246,30 @@ func (a *AuthService) AuthenticateWithAuthlib(authServerURL, username, password,
 	return &models.ApiResponse{Success: true, Data: authResp}
 }
 
-// RefreshAuthlibToken refreshes an authlib-injector access token
+// RefreshAuthlibToken refreshes an authlib-injector access token.
+//
+// Per the wiki, the refresh request:
+//   - sets `requestUser: true` so the launcher receives the user object
+//   - may include `selectedProfile` to perform a profile-selection refresh
+//     (required when the user has multiple profiles and login returned no
+//     selectedProfile).
 func (a *AuthService) RefreshAuthlibToken(authServerURL, accessToken, clientToken string) *models.ApiResponse {
+	return a.RefreshAuthlibTokenWithProfile(authServerURL, accessToken, clientToken, "")
+}
+
+// RefreshAuthlibTokenWithProfile is the full form of RefreshAuthlibToken. If
+// selectedProfileID is non-empty it is sent as `selectedProfile.id` so the
+// server binds the new token to that profile.
+func (a *AuthService) RefreshAuthlibTokenWithProfile(authServerURL, accessToken, clientToken, selectedProfileID string) *models.ApiResponse {
 	url := strings.TrimSuffix(authServerURL, "/") + "/authserver/refresh"
 
-	reqBody := map[string]string{
+	reqBody := map[string]interface{}{
 		"accessToken": accessToken,
 		"clientToken": clientToken,
+		"requestUser": true,
+	}
+	if selectedProfileID != "" {
+		reqBody["selectedProfile"] = map[string]string{"id": selectedProfileID}
 	}
 
 	jsonData, err := json.Marshal(reqBody)
@@ -161,7 +281,7 @@ func (a *AuthService) RefreshAuthlibToken(authServerURL, accessToken, clientToke
 	if err != nil {
 		return &models.ApiResponse{Success: false, Error: err.Error()}
 	}
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Type", "application/json; charset=utf-8")
 
 	resp, err := a.client.Do(req)
 	if err != nil {
@@ -170,6 +290,11 @@ func (a *AuthService) RefreshAuthlibToken(authServerURL, accessToken, clientToke
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
+		var errResp map[string]interface{}
+		json.NewDecoder(resp.Body).Decode(&errResp)
+		if errMsg, ok := errResp["errorMessage"].(string); ok {
+			return &models.ApiResponse{Success: false, Error: errMsg}
+		}
 		return &models.ApiResponse{Success: false, Error: fmt.Sprintf("HTTP %d", resp.StatusCode)}
 	}
 
@@ -179,6 +304,53 @@ func (a *AuthService) RefreshAuthlibToken(authServerURL, accessToken, clientToke
 	}
 
 	return &models.ApiResponse{Success: true, Data: authResp}
+}
+
+// ValidateAuthlibToken calls POST /authserver/validate to check whether a
+// stored accessToken (and optional clientToken) is still valid. The wiki
+// requires a 204 No Content response on success; any other status means the
+// token is invalid. This is a prerequisite of the launcher's token
+// validity-check flow described in the launcher technical spec.
+func (a *AuthService) ValidateAuthlibToken(authServerURL, accessToken, clientToken string) *models.ApiResponse {
+	url := strings.TrimSuffix(authServerURL, "/") + "/authserver/validate"
+
+	reqBody := map[string]string{
+		"accessToken": accessToken,
+	}
+	if clientToken != "" {
+		reqBody["clientToken"] = clientToken
+	}
+
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return &models.ApiResponse{Success: false, Error: err.Error()}
+	}
+
+	req, err := http.NewRequest("POST", url, strings.NewReader(string(jsonData)))
+	if err != nil {
+		return &models.ApiResponse{Success: false, Error: err.Error()}
+	}
+	req.Header.Set("Content-Type", "application/json; charset=utf-8")
+
+	resp, err := a.client.Do(req)
+	if err != nil {
+		return &models.ApiResponse{Success: false, Error: err.Error()}
+	}
+	defer resp.Body.Close()
+
+	switch resp.StatusCode {
+	case http.StatusNoContent:
+		return &models.ApiResponse{Success: true}
+	case http.StatusForbidden:
+		return &models.ApiResponse{Success: false, Error: "Invalid token"}
+	default:
+		var errResp map[string]interface{}
+		json.NewDecoder(resp.Body).Decode(&errResp)
+		if errMsg, ok := errResp["errorMessage"].(string); ok && errMsg != "" {
+			return &models.ApiResponse{Success: false, Error: errMsg}
+		}
+		return &models.ApiResponse{Success: false, Error: fmt.Sprintf("HTTP %d", resp.StatusCode)}
+	}
 }
 
 // ==================== BMCLAPI Service ====================
@@ -961,6 +1133,13 @@ func (l *LauncherService) BuildLaunchCommand(config models.LauncherConfig, versi
 	// Authlib-Injector: -javaagent:/path/authlib-injector.jar=<auth-server>
 	if strings.EqualFold(account.AuthType, "authlib-injector") && config.AuthlibJar != "" && account.AuthServer != "" {
 		args = append(args, fmt.Sprintf("-javaagent:%s=%s", config.AuthlibJar, strings.TrimRight(account.AuthServer, "/")))
+		// 配置预获取: -Dauthlibinjector.yggdrasil.prefetched=<Base64(meta JSON)>
+		// The metadata is fetched once via GetAuthlibMeta and cached; passing
+		// it here lets authlib-injector avoid a network round-trip at game
+		// startup and prevents a crash if the network drops mid-launch.
+		if config.AuthlibMetaJSON != "" {
+			args = append(args, "-Dauthlibinjector.yggdrasil.prefetched="+base64.StdEncoding.EncodeToString([]byte(config.AuthlibMetaJSON)))
+		}
 	}
 
 	args = append(args, "-cp", classpath, mainClass)
