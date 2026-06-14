@@ -186,6 +186,7 @@ func (r *Router) setupMCRoutes(rg *gin.RouterGroup) {
 	launcher := rg.Group("/launcher")
 	{
 		launcher.GET("/config", r.MC.GetLauncherConfig)
+		launcher.PUT("/config", r.MC.UpdateLauncherConfig)
 		launcher.POST("/launch", r.MC.LaunchGame)
 		launcher.GET("/minecraft-dir", r.MC.GetMinecraftDir)
 		launcher.GET("/installed-versions", r.MC.ListInstalledVersions)

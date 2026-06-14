@@ -15,10 +15,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
 	"HRPMLW/internal/models"
+	"HRPMLW/internal/repository"
 )
 
 // ==================== Authlib Injector Service ====================
@@ -987,6 +989,103 @@ func (l *LauncherService) GetJavaPath() string {
 	return "java" // Fallback to PATH
 }
 
+// Setting keys used to persist the launcher config in the `settings` table.
+// Memory values are stored as text and parsed back to int on load.
+const (
+	settingKeyMaxMemory  = "launcher.max_memory"
+	settingKeyMinMemory  = "launcher.min_memory"
+	settingKeyJavaArgs   = "launcher.java_args"
+	settingKeyGameWidth  = "launcher.game_width"
+	settingKeyGameHeight = "launcher.game_height"
+	settingKeyGameDir    = "launcher.game_dir"
+	settingKeyAuthlibJar = "launcher.authlib_jar"
+)
+
+// GetLauncherConfig returns the current launcher configuration, merging
+// persisted user preferences (memory, JVM args, window size) with the
+// auto-detected Java path and game directory. Unset values fall back to
+// sane defaults matching the launcher standard:
+//   - MinMemory:  1024 MB  (-Xms1024m)
+//   - MaxMemory:  4096 MB  (-Xmx4096m)
+//   - GameWidth:  854
+//   - GameHeight: 480
+func (l *LauncherService) GetLauncherConfig() models.LauncherConfig {
+	settings, _ := loadLauncherSettings()
+	maxMem := parseIntSetting(settings[settingKeyMaxMemory], 4096)
+	minMem := parseIntSetting(settings[settingKeyMinMemory], 1024)
+	width := parseIntSetting(settings[settingKeyGameWidth], 854)
+	height := parseIntSetting(settings[settingKeyGameHeight], 480)
+
+	gameDir := settings[settingKeyGameDir]
+	if gameDir == "" {
+		gameDir = l.GetMinecraftDir()
+	}
+
+	javaArgs := settings[settingKeyJavaArgs]
+
+	return models.LauncherConfig{
+		JavaPath:   l.GetJavaPath(),
+		MaxMemory:  maxMem,
+		MinMemory:  minMem,
+		JavaArgs:   javaArgs,
+		GameWidth:  width,
+		GameHeight: height,
+		GameDir:    gameDir,
+		AuthlibJar: settings[settingKeyAuthlibJar],
+	}
+}
+
+// SaveLauncherConfig persists the user-editable subset of the launcher
+// configuration. JavaPath and GameDir are auto-detected on every launch and
+// intentionally not overwritten here.
+//
+// The values are written to the `settings` table under the keys defined
+// above. Invalid (non-numeric) memory/size values are rejected before
+// persistence and returned as a non-success ApiResponse so the frontend
+// can surface a clear error to the user.
+func (l *LauncherService) SaveLauncherConfig(cfg models.LauncherConfig) *models.ApiResponse {
+	if cfg.MinMemory < 0 || cfg.MaxMemory < 0 {
+		return &models.ApiResponse{Success: false, Error: "memory values must be non-negative"}
+	}
+	if cfg.MaxMemory > 0 && cfg.MinMemory > 0 && cfg.MinMemory > cfg.MaxMemory {
+		return &models.ApiResponse{Success: false, Error: "min memory cannot exceed max memory"}
+	}
+	if cfg.GameWidth < 0 || cfg.GameHeight < 0 {
+		return &models.ApiResponse{Success: false, Error: "game window dimensions must be non-negative"}
+	}
+
+	if err := saveLauncherSetting(settingKeyMaxMemory, cfg.MaxMemory, "integer", "Maximum heap size in MB (-Xmx)"); err != nil {
+		return &models.ApiResponse{Success: false, Error: err.Error()}
+	}
+	if err := saveLauncherSetting(settingKeyMinMemory, cfg.MinMemory, "integer", "Minimum heap size in MB (-Xms)"); err != nil {
+		return &models.ApiResponse{Success: false, Error: err.Error()}
+	}
+	if err := saveLauncherSetting(settingKeyJavaArgs, cfg.JavaArgs, "string", "Additional JVM arguments"); err != nil {
+		return &models.ApiResponse{Success: false, Error: err.Error()}
+	}
+	if err := saveLauncherSetting(settingKeyGameWidth, cfg.GameWidth, "integer", "Game window width"); err != nil {
+		return &models.ApiResponse{Success: false, Error: err.Error()}
+	}
+	if err := saveLauncherSetting(settingKeyGameHeight, cfg.GameHeight, "integer", "Game window height"); err != nil {
+		return &models.ApiResponse{Success: false, Error: err.Error()}
+	}
+	if cfg.GameDir != "" {
+		if err := saveLauncherSetting(settingKeyGameDir, cfg.GameDir, "string", "Game directory (.minecraft)"); err != nil {
+			return &models.ApiResponse{Success: false, Error: err.Error()}
+		}
+	}
+	if cfg.AuthlibJar != "" {
+		if err := saveLauncherSetting(settingKeyAuthlibJar, cfg.AuthlibJar, "string", "Path to authlib-injector.jar"); err != nil {
+			return &models.ApiResponse{Success: false, Error: err.Error()}
+		}
+	}
+
+	return &models.ApiResponse{
+		Success: true,
+		Data:    l.GetLauncherConfig(),
+	}
+}
+
 // loadVersionJSON reads the version JSON file from <gameDir>/versions/<id>/<id>.json
 func (l *LauncherService) loadVersionJSON(versionID, gameDir string) (*BMCLVersionJSON, error) {
 	versionJSONPath := filepath.Join(gameDir, "versions", versionID, versionID+".json")
@@ -1328,4 +1427,44 @@ func Unzip(src, dest string) error {
 	}
 
 	return nil
+}
+
+// ==================== Launcher Config Persistence ====================
+
+// loadLauncherSettings reads all `settings` rows into a key→value map. Used by
+// GetLauncherConfig to layer persisted user preferences over the defaults.
+// Errors are intentionally swallowed (treated as empty) so a missing or
+// corrupt settings table still returns a usable config.
+func loadLauncherSettings() (map[string]string, error) {
+	settingsRepo := repository.NewSettingRepository()
+	all, err := settingsRepo.GetAll()
+	if err != nil {
+		return map[string]string{}, err
+	}
+	out := make(map[string]string, len(all))
+	for _, s := range all {
+		out[s.Key] = s.Value
+	}
+	return out, nil
+}
+
+// saveLauncherSetting writes a single key/value to the settings table. The
+// value is formatted using fmt.Sprintf("%v", value) so callers can pass int or
+// string interchangeably.
+func saveLauncherSetting(key string, value interface{}, settingType, description string) error {
+	settingsRepo := repository.NewSettingRepository()
+	return settingsRepo.Set(key, fmt.Sprintf("%v", value), settingType, description)
+}
+
+// parseIntSetting converts a persisted setting value to int. Falls back to the
+// provided default when the value is empty, missing, or not a valid integer.
+func parseIntSetting(value string, defaultValue int) int {
+	if value == "" {
+		return defaultValue
+	}
+	n, err := strconv.Atoi(value)
+	if err != nil {
+		return defaultValue
+	}
+	return n
 }

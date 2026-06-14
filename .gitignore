@@ -1,5 +1,5 @@
 # Go
-build/bin
+build
 *.exe
 *.exe~
 *.dll
@@ -9,13 +9,6 @@ build/bin
 *.out
 vendor/
 go.work
-
-# Wails build output
-build/bin
-build/darwin/HRPMLW.app
-build/windows/HRPMLW.exe
-build/linux/
-build/appicon.png
 
 # Node / Frontend
 node_modules/
@@ -49,3 +42,4 @@ yarn-error.log*
 # OS
 .DS_Store
 
+HRPMLW

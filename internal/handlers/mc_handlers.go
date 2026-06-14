@@ -79,9 +79,9 @@ func (h *MCHandler) AuthlibLogin(c *gin.Context) {
 
 // AuthlibRefresh handles POST /api/auth/refresh
 type AuthlibRefreshRequest struct {
-	Server           string `json:"server" binding:"required"`
-	AccessToken      string `json:"access_token" binding:"required"`
-	ClientToken      string `json:"client_token" binding:"required"`
+	Server            string `json:"server" binding:"required"`
+	AccessToken       string `json:"access_token" binding:"required"`
+	ClientToken       string `json:"client_token" binding:"required"`
 	SelectedProfileID string `json:"selected_profile_id"`
 }
 
@@ -387,16 +387,32 @@ func (h *MCHandler) DownloadVersion(c *gin.Context) {
 
 // GetLauncherConfig handles GET /api/launcher/config
 func (h *MCHandler) GetLauncherConfig(c *gin.Context) {
-	config := models.LauncherConfig{
-		JavaPath:   h.launcherService.GetJavaPath(),
-		MaxMemory:  4096,
-		MinMemory:  1024,
-		GameWidth:  854,
-		GameHeight: 480,
-		GameDir:    h.launcherService.GetMinecraftDir(),
+	config := h.launcherService.GetLauncherConfig()
+	c.JSON(http.StatusOK, models.ApiResponse{Success: true, Data: config})
+}
+
+// UpdateLauncherConfig handles PUT /api/launcher/config
+//
+// Persists the user-editable subset of the launcher configuration
+// (memory, JVM args, window size, game directory, authlib jar path) to
+// the settings table. JavaPath is auto-detected on every launch and is
+// ignored by the persistence layer.
+//
+// The full merged config is returned so the frontend can refresh its
+// state without a second GET.
+func (h *MCHandler) UpdateLauncherConfig(c *gin.Context) {
+	var cfg models.LauncherConfig
+	if err := c.BindJSON(&cfg); err != nil {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: err.Error()})
+		return
 	}
 
-	c.JSON(http.StatusOK, models.ApiResponse{Success: true, Data: config})
+	result := h.launcherService.SaveLauncherConfig(cfg)
+	if result.Success {
+		c.JSON(http.StatusOK, result)
+	} else {
+		c.JSON(http.StatusBadRequest, result)
+	}
 }
 
 // LaunchGame handles POST /api/launcher/launch
@@ -407,9 +423,9 @@ type LaunchGameRequest struct {
 	UUID          string `json:"uuid" binding:"required"`
 	AccessToken   string `json:"access_token" binding:"required"`
 	ClientToken   string `json:"client_token" binding:"required"`
-	AuthType      string `json:"auth_type"`   // "offline" | "microsoft" | "authlib-injector"
-	AuthServer    string `json:"auth_server"` // required when AuthType == "authlib-injector"
-	AuthlibJar    string `json:"authlib_jar"` // absolute path to authlib-injector.jar (optional)
+	AuthType      string `json:"auth_type"`    // "offline" | "microsoft" | "authlib-injector"
+	AuthServer    string `json:"auth_server"`  // required when AuthType == "authlib-injector"
+	AuthlibJar    string `json:"authlib_jar"`  // absolute path to authlib-injector.jar (optional)
 	AuthlibMeta   string `json:"authlib_meta"` // raw API metadata JSON; auto-fetched if empty
 	GameDir       string `json:"game_dir"`
 	JavaPath      string `json:"java_path"`

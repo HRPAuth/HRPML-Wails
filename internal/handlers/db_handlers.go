@@ -1,6 +1,9 @@
 package handlers
 
 import (
+	"HRPMLW/internal/database"
+	"HRPMLW/internal/models"
+	"HRPMLW/internal/repository"
 	"bytes"
 	"fmt"
 	"net/http"
@@ -10,10 +13,6 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
-
-	"HRPMLW/internal/database"
-	"HRPMLW/internal/models"
-	"HRPMLW/internal/repository"
 )
 
 // DBHandler holds database handlers

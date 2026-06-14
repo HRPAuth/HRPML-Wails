@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
-import { Box, Typography, Card, CardContent, Chip, Button, TextField, Dialog, DialogTitle, DialogContent, DialogActions, IconButton, Tooltip } from '@mui/material';
-import { Add, Delete, Star, Edit, Check, X } from '@mui/icons-material';
+import { Box, Typography, Card, CardContent, Chip, Button, TextField, Dialog, DialogTitle, DialogContent, DialogActions, IconButton, Tooltip, Slider, Alert, Snackbar } from '@mui/material';
+import { Add, Delete, Star, Edit, Check, X, Save, Memory } from '@mui/icons-material';
 
 interface JavaInstallation {
   id: number;
@@ -19,7 +19,18 @@ interface LauncherConfig {
   min_memory: number;
   game_width: number;
   game_height: number;
+  java_args?: string;
 }
+
+const API_BASE = 'http://localhost:34501/api/v1';
+
+// Maximum memory cap for the slider. Minecraft's launcher standard does not
+// cap this explicitly, but 32 GB is well past any practical gameplay need
+// and keeps the slider responsive.
+const MAX_MEMORY_MB = 32768;
+const MIN_MEMORY_MB = 256;
+const MAX_GAME_DIMENSION = 3840;
+const MIN_GAME_DIMENSION = 320;
 
 export default function SettingsView() {
   const [config, setConfig] = useState<LauncherConfig | null>(null);
@@ -32,6 +43,19 @@ export default function SettingsView() {
   const [newJavaName, setNewJavaName] = useState('');
   const [dialogError, setDialogError] = useState('');
 
+  // Memory settings draft (the values shown in inputs/sliders before saving).
+  // Kept separate from `config` so the user can tweak without losing the
+  // last-saved value if validation fails.
+  const [minMemory, setMinMemory] = useState(1024);
+  const [maxMemory, setMaxMemory] = useState(4096);
+  const [javaArgs, setJavaArgs] = useState('');
+  const [gameWidth, setGameWidth] = useState(854);
+  const [gameHeight, setGameHeight] = useState(480);
+  const [savingConfig, setSavingConfig] = useState(false);
+  const [saveError, setSaveError] = useState('');
+  const [saveSuccess, setSaveSuccess] = useState(false);
+  const [dirty, setDirty] = useState(false);
+
   useEffect(() => {
     fetchConfig();
     fetchJavaInstallations();
@@ -39,10 +63,15 @@ export default function SettingsView() {
 
   const fetchConfig = async () => {
     try {
-      const response = await fetch('http://localhost:34501/api/v1/launcher/config');
+      const response = await fetch(`${API_BASE}/launcher/config`);
       const data = await response.json();
       if (data.success && data.data) {
         setConfig(data.data);
+        setMinMemory(data.data.min_memory ?? 1024);
+        setMaxMemory(data.data.max_memory ?? 4096);
+        setJavaArgs(data.data.java_args ?? '');
+        setGameWidth(data.data.game_width ?? 854);
+        setGameHeight(data.data.game_height ?? 480);
       }
     } catch (err) {
       console.error('Failed to fetch config:', err);
@@ -53,7 +82,7 @@ export default function SettingsView() {
     setLoading(true);
     setError('');
     try {
-      const response = await fetch('http://localhost:34501/api/v1/db/java');
+      const response = await fetch(`${API_BASE}/db/java`);
       const data = await response.json();
       if (Array.isArray(data)) {
         setJavaInstallations(data);
@@ -65,6 +94,87 @@ export default function SettingsView() {
     } finally {
       setLoading(false);
     }
+  };
+
+  // validateMemorySettings returns the first user-facing validation error, or
+  // empty string when the in-progress memory/JVM values are acceptable.
+  // Bounds align with the backend SaveLauncherConfig validator and the
+  // slider caps defined above.
+  const validateMemorySettings = (): string => {
+    if (minMemory < MIN_MEMORY_MB) {
+      return `Minimum memory must be at least ${MIN_MEMORY_MB} MB`;
+    }
+    if (maxMemory < MIN_MEMORY_MB) {
+      return `Maximum memory must be at least ${MIN_MEMORY_MB} MB`;
+    }
+    if (maxMemory > MAX_MEMORY_MB) {
+      return `Maximum memory cannot exceed ${MAX_MEMORY_MB} MB`;
+    }
+    if (minMemory > maxMemory) {
+      return 'Minimum memory cannot exceed maximum memory';
+    }
+    if (gameWidth < MIN_GAME_DIMENSION || gameWidth > MAX_GAME_DIMENSION) {
+      return `Game width must be between ${MIN_GAME_DIMENSION} and ${MAX_GAME_DIMENSION}`;
+    }
+    if (gameHeight < MIN_GAME_DIMENSION || gameHeight > MAX_GAME_DIMENSION) {
+      return `Game height must be between ${MIN_GAME_DIMENSION} and ${MAX_GAME_DIMENSION}`;
+    }
+    return '';
+  };
+
+  // handleSaveConfig persists the in-progress memory settings to the
+  // backend (PUT /api/v1/launcher/config). On success it replaces `config`
+  // with the merged response from the server and clears the dirty flag.
+  const handleSaveConfig = async () => {
+    const validationError = validateMemorySettings();
+    if (validationError) {
+      setSaveError(validationError);
+      return;
+    }
+
+    setSavingConfig(true);
+    setSaveError('');
+    try {
+      const response = await fetch(`${API_BASE}/launcher/config`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          min_memory: minMemory,
+          max_memory: maxMemory,
+          java_args: javaArgs,
+          game_width: gameWidth,
+          game_height: gameHeight
+        })
+      });
+      const data = await response.json();
+      if (response.ok && data.success) {
+        setConfig(data.data);
+        setMinMemory(data.data.min_memory ?? minMemory);
+        setMaxMemory(data.data.max_memory ?? maxMemory);
+        setJavaArgs(data.data.java_args ?? '');
+        setGameWidth(data.data.game_width ?? gameWidth);
+        setGameHeight(data.data.game_height ?? gameHeight);
+        setDirty(false);
+        setSaveSuccess(true);
+      } else {
+        setSaveError(data.error || 'Failed to save settings');
+      }
+    } catch (err) {
+      setSaveError('Failed to save settings');
+    } finally {
+      setSavingConfig(false);
+    }
+  };
+
+  const handleResetConfig = () => {
+    if (!config) return;
+    setMinMemory(config.min_memory ?? 1024);
+    setMaxMemory(config.max_memory ?? 4096);
+    setJavaArgs(config.java_args ?? '');
+    setGameWidth(config.game_width ?? 854);
+    setGameHeight(config.game_height ?? 480);
+    setDirty(false);
+    setSaveError('');
   };
 
   const handleAddJava = async () => {
@@ -344,20 +454,254 @@ export default function SettingsView() {
 
       <Card sx={{ backgroundColor: '#1f2937' }}>
         <CardContent>
-          <Typography variant="h6" sx={{ color: 'white', marginBottom: 2 }}>
-            Memory Settings
-          </Typography>
-
-          <Box sx={{ display: 'flex', gap: 4 }}>
-            <div>
-              <Typography sx={{ color: '#9ca3af', fontSize: '0.875rem' }}>Minimum Memory</Typography>
-              <Typography sx={{ color: 'white' }}>{config?.min_memory || 0} MB</Typography>
-            </div>
-            <div>
-              <Typography sx={{ color: '#9ca3af', fontSize: '0.875rem' }}>Maximum Memory</Typography>
-              <Typography sx={{ color: 'white' }}>{config?.max_memory || 0} MB</Typography>
-            </div>
+          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 2 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <Memory sx={{ color: '#60a5fa' }} />
+              <Typography variant="h6" sx={{ color: 'white' }}>
+                Memory &amp; JVM Settings
+              </Typography>
+            </Box>
+            <Box sx={{ display: 'flex', gap: 1 }}>
+              <Button
+                onClick={handleResetConfig}
+                disabled={!dirty || savingConfig}
+                sx={{ color: '#9ca3af' }}
+                startIcon={<X />}
+              >
+                Reset
+              </Button>
+              <Button
+                onClick={handleSaveConfig}
+                disabled={!dirty || savingConfig}
+                variant="contained"
+                color="primary"
+                startIcon={<Save />}
+              >
+                {savingConfig ? 'Saving...' : 'Save'}
+              </Button>
+            </Box>
           </Box>
+
+          {saveError && (
+            <Alert severity="error" sx={{ marginBottom: 2 }} onClose={() => setSaveError('')}>
+              {saveError}
+            </Alert>
+          )}
+
+          <Typography sx={{ color: '#9ca3af', fontSize: '0.875rem', marginBottom: 1 }}>
+            Maximum Memory: <Box component="span" sx={{ color: 'white', fontWeight: 'bold' }}>{maxMemory} MB</Box>
+            <Box component="span" sx={{ color: '#9ca3af', marginLeft: 1 }}>(-Xmx{maxMemory}m)</Box>
+          </Typography>
+          <Slider
+            value={maxMemory}
+            min={MIN_MEMORY_MB}
+            max={MAX_MEMORY_MB}
+            step={256}
+            marks={[
+              { value: 1024, label: '1G' },
+              { value: 2048, label: '2G' },
+              { value: 4096, label: '4G' },
+              { value: 8192, label: '8G' },
+              { value: 16384, label: '16G' }
+            ]}
+            valueLabelDisplay="auto"
+            valueLabelFormat={(v) => `${v} MB`}
+            onChange={(_, value) => {
+              setMaxMemory(value as number);
+              setDirty(true);
+            }}
+            sx={{
+              color: '#3b82f6',
+              marginBottom: 2,
+              '& .MuiSlider-markLabel': { color: '#9ca3af', fontSize: '0.75rem' }
+            }}
+          />
+          <TextField
+            type="number"
+            label="Maximum Memory (MB)"
+            variant="outlined"
+            size="small"
+            value={maxMemory}
+            onChange={(e) => {
+              const v = Number(e.target.value);
+              if (!Number.isNaN(v)) {
+                setMaxMemory(v);
+                setDirty(true);
+              }
+            }}
+            slotProps={{ htmlInput: { min: MIN_MEMORY_MB, max: MAX_MEMORY_MB, step: 256 } }}
+            sx={{
+              marginBottom: 3,
+              width: 240,
+              input: { color: 'white' },
+              label: { color: '#9ca3af' },
+              '& .MuiOutlinedInput-root': {
+                '& fieldset': { borderColor: '#4b5563' },
+                '&:hover fieldset': { borderColor: '#60a5fa' },
+                '&.Mui-focused fieldset': { borderColor: '#3b82f6' }
+              }
+            }}
+          />
+
+          <Typography sx={{ color: '#9ca3af', fontSize: '0.875rem', marginBottom: 1 }}>
+            Minimum Memory: <Box component="span" sx={{ color: 'white', fontWeight: 'bold' }}>{minMemory} MB</Box>
+            <Box component="span" sx={{ color: '#9ca3af', marginLeft: 1 }}>(-Xms{minMemory}m)</Box>
+          </Typography>
+          <Slider
+            value={Math.min(minMemory, maxMemory)}
+            min={MIN_MEMORY_MB}
+            max={maxMemory}
+            step={256}
+            marks={[
+              { value: MIN_MEMORY_MB, label: `${MIN_MEMORY_MB}M` },
+              { value: Math.round(maxMemory / 2), label: `${Math.round(maxMemory / 2)}M` },
+              { value: maxMemory, label: `${maxMemory}M` }
+            ]}
+            valueLabelDisplay="auto"
+            valueLabelFormat={(v) => `${v} MB`}
+            onChange={(_, value) => {
+              setMinMemory(value as number);
+              setDirty(true);
+            }}
+            sx={{
+              color: '#10b981',
+              marginBottom: 2,
+              '& .MuiSlider-markLabel': { color: '#9ca3af', fontSize: '0.75rem' }
+            }}
+          />
+          <TextField
+            type="number"
+            label="Minimum Memory (MB)"
+            variant="outlined"
+            size="small"
+            value={minMemory}
+            onChange={(e) => {
+              const v = Number(e.target.value);
+              if (!Number.isNaN(v)) {
+                setMinMemory(v);
+                setDirty(true);
+              }
+            }}
+            slotProps={{ htmlInput: { min: MIN_MEMORY_MB, max: MAX_MEMORY_MB, step: 256 } }}
+            sx={{
+              marginBottom: 3,
+              width: 240,
+              input: { color: 'white' },
+              label: { color: '#9ca3af' },
+              '& .MuiOutlinedInput-root': {
+                '& fieldset': { borderColor: '#4b5563' },
+                '&:hover fieldset': { borderColor: '#60a5fa' },
+                '&.Mui-focused fieldset': { borderColor: '#3b82f6' }
+              }
+            }}
+          />
+
+          <Typography sx={{ color: '#9ca3af', fontSize: '0.875rem', marginBottom: 1 }}>
+            Additional JVM Arguments
+          </Typography>
+          <TextField
+            label="Java Args"
+            variant="outlined"
+            fullWidth
+            multiline
+            minRows={2}
+            maxRows={4}
+            value={javaArgs}
+            onChange={(e) => {
+              setJavaArgs(e.target.value);
+              setDirty(true);
+            }}
+            placeholder="e.g., -XX:+UseG1GC -XX:MaxGCPauseMillis=50"
+            sx={{
+              marginBottom: 3,
+              input: { color: 'white' },
+              textarea: { color: 'white', fontFamily: 'monospace', fontSize: '0.875rem' },
+              label: { color: '#9ca3af' },
+              '& .MuiOutlinedInput-root': {
+                '& fieldset': { borderColor: '#4b5563' },
+                '&:hover fieldset': { borderColor: '#60a5fa' },
+                '&.Mui-focused fieldset': { borderColor: '#3b82f6' }
+              }
+            }}
+          />
+
+          <Typography sx={{ color: '#9ca3af', fontSize: '0.875rem', marginBottom: 1 }}>
+            Game Window Size
+          </Typography>
+          <Box sx={{ display: 'flex', gap: 2, marginBottom: 2 }}>
+            <TextField
+              type="number"
+              label="Width"
+              variant="outlined"
+              size="small"
+              value={gameWidth}
+              onChange={(e) => {
+                const v = Number(e.target.value);
+                if (!Number.isNaN(v)) {
+                  setGameWidth(v);
+                  setDirty(true);
+                }
+              }}
+              slotProps={{ htmlInput: { min: MIN_GAME_DIMENSION, max: MAX_GAME_DIMENSION, step: 1 } }}
+              sx={{
+                width: 140,
+                input: { color: 'white' },
+                label: { color: '#9ca3af' },
+                '& .MuiOutlinedInput-root': {
+                  '& fieldset': { borderColor: '#4b5563' },
+                  '&:hover fieldset': { borderColor: '#60a5fa' },
+                  '&.Mui-focused fieldset': { borderColor: '#3b82f6' }
+                }
+              }}
+            />
+            <TextField
+              type="number"
+              label="Height"
+              variant="outlined"
+              size="small"
+              value={gameHeight}
+              onChange={(e) => {
+                const v = Number(e.target.value);
+                if (!Number.isNaN(v)) {
+                  setGameHeight(v);
+                  setDirty(true);
+                }
+              }}
+              slotProps={{ htmlInput: { min: MIN_GAME_DIMENSION, max: MAX_GAME_DIMENSION, step: 1 } }}
+              sx={{
+                width: 140,
+                input: { color: 'white' },
+                label: { color: '#9ca3af' },
+                '& .MuiOutlinedInput-root': {
+                  '& fieldset': { borderColor: '#4b5563' },
+                  '&:hover fieldset': { borderColor: '#60a5fa' },
+                  '&.Mui-focused fieldset': { borderColor: '#3b82f6' }
+                }
+              }}
+            />
+          </Box>
+
+          <Typography sx={{ color: '#9ca3af', fontSize: '0.875rem', marginBottom: 1 }}>
+            JVM Args Preview
+          </Typography>
+          <Chip
+            label={
+              `-Xms${minMemory}m -Xmx${maxMemory}m ` +
+              (javaArgs.trim() ? `${javaArgs.trim()} ` : '') +
+              `--width ${gameWidth} --height ${gameHeight}`
+            }
+            sx={{
+              backgroundColor: '#1f2937',
+              color: '#d1d5db',
+              fontFamily: 'monospace',
+              fontSize: '0.75rem',
+              maxWidth: '100%',
+              height: 'auto',
+              whiteSpace: 'normal',
+              padding: '8px 12px',
+              wordBreak: 'break-all'
+            }}
+          />
         </CardContent>
       </Card>
 
@@ -430,6 +774,17 @@ export default function SettingsView() {
           </Button>
         </DialogActions>
       </Dialog>
+
+      <Snackbar
+        open={saveSuccess}
+        autoHideDuration={3000}
+        onClose={() => setSaveSuccess(false)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+      >
+        <Alert severity="success" onClose={() => setSaveSuccess(false)} sx={{ width: '100%' }}>
+          Memory settings saved
+        </Alert>
+      </Snackbar>
     </Box>
   );
 }
