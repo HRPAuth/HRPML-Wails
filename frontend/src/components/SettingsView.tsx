@@ -299,10 +299,6 @@ export default function SettingsView() {
 
   return (
     <Box>
-      <Typography variant="h4" component="h1" gutterBottom sx={{ color: 'white' }}>
-        Settings
-      </Typography>
-
       {error && (
         <Typography sx={{ color: '#ef4444', marginBottom: 2 }}>{error}</Typography>
       )}
