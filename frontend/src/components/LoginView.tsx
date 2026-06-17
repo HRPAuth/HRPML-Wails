@@ -214,9 +214,6 @@ export default function LoginView({ onLoginSuccess, onSwitchToAccounts }: LoginV
         }}
       >
         <Box sx={{ textAlign: 'center', mb: 3 }}>
-          <Typography variant="h4" component="h1" sx={{ color: '#4CAF50', fontWeight: 'bold', mb: 1 }}>
-            Login with HRPAUTH
-          </Typography>
         </Box>
 
         <Box sx={{ mb: 3 }}>

@@ -292,9 +292,6 @@ export default function SettingsView() {
   if (loading) {
     return (
       <Box>
-        <Typography variant="h4" component="h1" gutterBottom sx={{ color: 'white' }}>
-          Settings
-        </Typography>
         <Typography sx={{ color: '#9ca3af' }}>Loading...</Typography>
       </Box>
     );

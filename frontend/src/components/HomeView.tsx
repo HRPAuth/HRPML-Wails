@@ -332,9 +332,6 @@ export default function HomeView({
 
   return (
     <Box>
-      <Typography variant="h4" component="h1" gutterBottom sx={{ color: 'white' }}>
-        Play
-      </Typography>
 
       <Collapse in={!!error}>
         <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError('')}>

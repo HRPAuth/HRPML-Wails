@@ -49,6 +49,8 @@ interface VersionManagerProps {
 
 const STORAGE_KEY = 'installed_versions';
 
+const REVOLUTION_VERSIONS = ['1.12.2', '1.21.1'];
+
 export default function VersionManager({ onSelectVersion }: VersionManagerProps) {
   const [versions, setVersions] = useState<MCVersion[]>([]);
   const [installedVersions, setInstalledVersions] = useState<InstalledVersion[]>([]);
@@ -173,9 +175,6 @@ export default function VersionManager({ onSelectVersion }: VersionManagerProps)
   return (
     <Box>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
-        <Typography variant="h4" component="h1" sx={{ color: 'white' }}>
-          Versions
-        </Typography>
         <Button
           variant="outlined"
           startIcon={<Refresh />}
@@ -199,6 +198,7 @@ export default function VersionManager({ onSelectVersion }: VersionManagerProps)
       >
         <Tab label="Installed" />
         <Tab label="All Versions" />
+        <Tab label="Revolution" />
       </Tabs>
 
       {tabValue === 1 && (
@@ -316,7 +316,7 @@ export default function VersionManager({ onSelectVersion }: VersionManagerProps)
             ))}
           </List>
         )
-      ) : (
+      ) : tabValue === 1 ? (
         // All versions
         <List sx={{ backgroundColor: '#282c34', borderRadius: 1 }}>
           {versions
@@ -383,6 +383,79 @@ export default function VersionManager({ onSelectVersion }: VersionManagerProps)
             </ListItem>
           ))}
         </List>
+      ) : (
+        // Revolution versions
+        <Box>
+          <Typography variant="body2" sx={{ color: '#9ca3af', mb: 2 }}>
+            There are some versions that are highly recommended if you are a Revolution player.
+          </Typography>
+          <List sx={{ backgroundColor: '#282c34', borderRadius: 1 }}>
+            {REVOLUTION_VERSIONS.map((id) => {
+              const version = versions.find((v) => v.id === id) || { id, type: 'release' };
+              return (
+                <ListItem
+                  key={id}
+                  sx={{
+                    '&:hover': { backgroundColor: '#323842' },
+                  }}
+                >
+                  <ListItemText
+                    primary={
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                        <Typography sx={{ color: 'white' }}>{id}</Typography>
+                        {isInstalled(id) && (
+                          <CheckCircle sx={{ fontSize: 16, color: '#4CAF50' }} />
+                        )}
+                      </Box>
+                    }
+                    secondary={
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.5 }}>
+                        <Chip
+                          size="small"
+                          label={version.type}
+                          sx={{
+                            height: 20,
+                            fontSize: '0.7rem',
+                            backgroundColor: getVersionTypeColor(version.type),
+                            color: 'white',
+                          }}
+                        />
+                        {version.releaseTime && (
+                          <Typography variant="caption" sx={{ color: '#6b7280' }}>
+                            {formatDate(version.releaseTime)}
+                          </Typography>
+                        )}
+                      </Box>
+                    }
+                  />
+                  <ListItemSecondaryAction>
+                    {downloading === id ? (
+                      <CircularProgress size={24} sx={{ color: '#4CAF50' }} />
+                    ) : isInstalled(id) ? (
+                      <Chip
+                        size="small"
+                        label="Installed"
+                        sx={{
+                          height: 24,
+                          backgroundColor: '#4CAF50',
+                          color: 'white',
+                        }}
+                      />
+                    ) : (
+                      <IconButton
+                        edge="end"
+                        onClick={() => handleDownload(version)}
+                        sx={{ color: '#4CAF50' }}
+                      >
+                        <Download />
+                      </IconButton>
+                    )}
+                  </ListItemSecondaryAction>
+                </ListItem>
+              );
+            })}
+          </List>
+        </Box>
       )}
     </Box>
   );
